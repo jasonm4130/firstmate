@@ -1316,6 +1316,17 @@ parse_orca_worktree_result() {
   fi
 }
 
+# True when an aborting spawn must leave its herdr task pane open: no slot was
+# adopted yet and the checkout under `treehouse get` still runs, before
+# Treehouse hands over the slot shell. Closing the pane then would hang up the
+# checkout; git drops the slot's registration but leaves the half-written slot,
+# which Treehouse quarantines and the next slot's registration can take over.
+spawn_abort_keeps_treehouse_pane() {
+  [ "$HERDR_PROJECTION_ABORT_CLEANUP" = 1 ] && [ -z "${WT:-}" ] &&
+    [ -n "$HERDR_PROJECTION_ABORT_TASK_PANE" ] &&
+    fm_backend_herdr_pane_runs_treehouse_get "$HERDR_PROJECTION_ABORT_SESSION" "$HERDR_PROJECTION_ABORT_TASK_PANE"
+}
+
 spawn_abort_cleanup() {
   local status=$?
   if [ "$RELAUNCH_REPLACEMENT_PENDING" = 1 ] &&
@@ -1342,14 +1353,7 @@ spawn_abort_cleanup() {
       fi
     fi
   fi
-  # While the checkout under `treehouse get` still runs, before Treehouse hands
-  # over the slot shell, closing the pane hangs up that checkout. Git then drops
-  # the slot's registration but leaves the half-written slot, which Treehouse
-  # quarantines and the next slot's registration can take over. Once Treehouse
-  # has handed over the slot shell, closing the pane returns the slot.
-  if [ "$HERDR_PROJECTION_ABORT_CLEANUP" = 1 ] && [ -z "${WT:-}" ] &&
-    [ -n "$HERDR_PROJECTION_ABORT_TASK_PANE" ] &&
-    fm_backend_herdr_pane_runs_treehouse_get "$HERDR_PROJECTION_ABORT_SESSION" "$HERDR_PROJECTION_ABORT_TASK_PANE"; then
+  if spawn_abort_keeps_treehouse_pane; then
     HERDR_PROJECTION_ABORT_CLEANUP=0
     echo "warning: leaving herdr pane $HERDR_PROJECTION_ABORT_TASK_PANE open because treehouse get is still running in it; close it once treehouse has finished" >&2
   fi
