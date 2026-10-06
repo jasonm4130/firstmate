@@ -1527,13 +1527,14 @@ fm_backend_herdr_args_run_treehouse_get() {  # <args>
 }
 
 # fm_backend_herdr_treehouse_get_handed_over: true when <pid>, a `treehouse get`
-# in <rows>, has a direct child that is the interactive shell Treehouse opens in
-# the slot once the checkout is done.
+# in <rows>, has a direct child other than git. Treehouse runs only git while it
+# checks the slot out, then hands the pane over by starting the slot's shell,
+# whatever program that is.
 fm_backend_herdr_treehouse_get_handed_over() {  # <pid> <rows>
   printf '%s\n' "$2" | awk -v parent="$1" '
     $2 == parent {
       program = $3; sub(/.*\//, "", program); sub(/^-/, "", program)
-      if (program ~ /^(sh|bash|zsh|fish|dash|ksh|mksh|tcsh|csh|nu|elvish|xonsh)$/) found = 1
+      if (program != "git") found = 1
     }
     END { exit(found ? 0 : 1) }'
 }
