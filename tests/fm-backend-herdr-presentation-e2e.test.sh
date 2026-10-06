@@ -158,7 +158,7 @@ if [ "$status" -eq 0 ] && [ "$mutation" = workspace-create ]; then
       printf '%s\n' "$(printf '%s' "$out" | jq -r '.result.tab.tab_id')" > "$ACTIVE_SEEDED_CONTROL/seeded-tab"
       printf '%s\n' "$(printf '%s' "$out" | jq -r '.result.root_pane.pane_id')" > "$ACTIVE_SEEDED_CONTROL/seeded-pane"
       ;;
-    $'└ abort-a · p:'*|$'└ abort-b · p:'*)
+    $'└ abort-a · p:'*|$'└ abort-b · p:'*|$'└ abort-hold · p:'*)
       task=${label#$'└ '}; task=${task%% *}
       mkdir -p "$POST_CREATE_ABORT_CONTROL/$task"
       printf '%s\n' "$(printf '%s' "$out" | jq -r '.result.workspace.workspace_id')" > "$POST_CREATE_ABORT_CONTROL/$task/workspace"
@@ -171,7 +171,7 @@ if [ "$status" -eq 0 ] && [ "$mutation" = tab-create ]; then
       printf '%s\n' "$(printf '%s' "$out" | jq -r '.result.root_pane.pane_id')" > "$ACTIVE_SEEDED_CONTROL/task-pane"
       printf '%s\n' task-created > "$ACTIVE_SEEDED_CONTROL/stage"
       ;;
-    fm-abort-a|fm-abort-b)
+    fm-abort-a|fm-abort-b|fm-abort-hold)
       task=${label#fm-}
       mkdir -p "$POST_CREATE_ABORT_CONTROL/$task"
       printf '%s\n' "$(printf '%s' "$out" | jq -r '.result.root_pane.pane_id')" > "$POST_CREATE_ABORT_CONTROL/$task/task-pane"
@@ -211,6 +211,10 @@ set -u
   printf '\n'
 } >> "$TREEHOUSE_CALL_LOG"
 if [ -d "$POST_CREATE_ABORT_CONTROL" ] && [ "${1:-}" = get ]; then
+  # A hold file stands in for a slot checkout still running under the pane.
+  while [ -e "$POST_CREATE_ABORT_CONTROL/hold-get" ]; do
+    sleep 0.1
+  done
   exit 0
 fi
 # Treehouse's pool allocator is outside the Herdr concurrency contract under
@@ -900,6 +904,34 @@ done
 rm -rf "$POST_CREATE_ABORT_CONTROL"
 rm -f "$HOME_DIR/state/abort-a.herdr-presentation" "$HOME_DIR/state/abort-b.herdr-presentation"
 pass "real Herdr lab: concurrent post-create abort cleanup stays serialized with exact focus restoration"
+
+# The aborts above ran after their `treehouse get` had already exited, so the
+# cleanup closed their panes. An abort while `treehouse get` is still running in
+# the pane must leave it open instead: closing it would hang up the slot
+# checkout. The hold file keeps the fake get running through the spawn's whole
+# discovery wait and abort.
+mkdir -p "$POST_CREATE_ABORT_CONTROL"
+: > "$POST_CREATE_ABORT_CONTROL/hold-get"
+HOLD_START=$(log_line_count)
+if spawn_task abort-hold "$HOME_DIR" "$PROJECT_DIR" > "$TMP_ROOT/abort-hold.out" 2> "$TMP_ROOT/abort-hold.err"; then
+  fail "held-get abort fixture unexpectedly succeeded"
+fi
+grep -F "did not enter an isolated worktree" "$TMP_ROOT/abort-hold.err" >/dev/null 2>&1 \
+  || fail "held-get abort fixture did not reach the discovery deadline: $(cat "$TMP_ROOT/abort-hold.err")"
+HOLD_PANE=$(cat "$POST_CREATE_ABORT_CONTROL/abort-hold/task-pane")
+grep -F "leaving herdr pane $HOLD_PANE open because treehouse get is still running in it" "$TMP_ROOT/abort-hold.err" >/dev/null 2>&1 \
+  || fail "abort with treehouse get still running did not report keeping its pane: $(cat "$TMP_ROOT/abort-hold.err")"
+HOLD_CLOSES=$(sed -n "$((HOLD_START + 1)),\$p" "$HERDR_CALL_LOG" | awk -F '\t' -v pane="$HOLD_PANE" '$1 == "pane" && $2 == "close" && $3 == pane')
+[ -z "$HOLD_CLOSES" ] || fail "abort closed task pane $HOLD_PANE while treehouse get still ran in it"
+lab pane get "$HOLD_PANE" >/dev/null 2>&1 \
+  || fail "task pane $HOLD_PANE is gone although treehouse get still ran in it"
+[ ! -e "$HOME_DIR/state/abort-hold.meta" ] || fail "held-get abort fixture published task metadata before launch"
+assert_focus_is "$CAPTAIN_FOCUS" "abort with treehouse get still running"
+rm -rf "$POST_CREATE_ABORT_CONTROL"
+lab pane close "$HOLD_PANE" >/dev/null 2>&1 || fail "could not close kept task pane $HOLD_PANE after the test"
+rm -f "$HOME_DIR/state/abort-hold.herdr-presentation"
+assert_focus_is "$CAPTAIN_FOCUS" "closing the kept task pane"
+pass "real Herdr lab: an abort while treehouse get still runs leaves its task pane open"
 
 SHAPE_CLEANUP_AUDIT_START=$(focus_audit_line_count)
 teardown_task shape "$HOME_DIR" > "$TMP_ROOT/on-teardown.out" 2> "$TMP_ROOT/on-teardown.err" \
