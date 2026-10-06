@@ -65,50 +65,52 @@ slot_acquired_now() {  # <slot>
   )
 }
 
-# Asserts one acquisition's probe lines: exactly one shell sample, acquired, in
-# a slot inside the isolated pool, and every checkout sample taken before it
-# pending. Checkouts after the shell sample belong to Treehouse's release of the
-# slot, which runs under the same reservation, so they are not acquisition
-# samples. Prints the slot.
-check_acquisition() {  # <description> <require-checkout-sample:0|1>
-  local what=$1 need_checkout=$2 shell_lines slot checkout_lines acquisition
+# Runs one real acquisition and prints the slot its shell sampled, failing
+# unless exactly one shell sample exists and it read the slot as acquired inside
+# the isolated pool.
+acquire_slot() {  # <description>
+  local what=$1 slot
   treehouse_get || fail "$what: treehouse get failed: $(cat "$TMP_ROOT/treehouse-get.out")"
-  shell_lines=$(grep -c '^shell ' "$PROBE_LOG")
-  [ "$shell_lines" -eq 1 ] || fail "$what: expected one slot-shell sample, got $shell_lines: $(cat "$PROBE_LOG")"
-  grep -q '^shell acquired ' "$PROBE_LOG" \
-    || fail "$what: the shell treehouse opened in the slot read the slot as not acquired: $(cat "$PROBE_LOG")"
+  [ "$(grep -c '^shell ' "$PROBE_LOG")" -eq 1 ] \
+    || fail "$what: expected one slot-shell sample: $(cat "$PROBE_LOG")"
   slot=$(sed -n 's/^shell acquired //p' "$PROBE_LOG")
+  [ -n "$slot" ] \
+    || fail "$what: the shell treehouse opened in the slot read the slot as not acquired: $(cat "$PROBE_LOG")"
   case "$slot" in
     "$(cd "$HOME_DIR" && pwd -P)"/.treehouse/*) ;;
     *) fail "$what: the slot shell ran outside the isolated pool: '$slot'" ;;
   esac
-  acquisition=$(sed '/^shell /q' "$PROBE_LOG")
-  checkout_lines=$(printf '%s\n' "$acquisition" | grep -c '^checkout ')
-  [ "$need_checkout" -eq 0 ] || [ "$checkout_lines" -ge 1 ] \
-    || fail "$what: the post-checkout hook never sampled the slot during acquisition: $(cat "$PROBE_LOG")"
-  if printf '%s\n' "$acquisition" | grep -q '^checkout acquired '; then
-    fail "$what: the slot read as acquired while its checkout was still running: $(cat "$PROBE_LOG")"
-  fi
   printf '%s\n' "$slot"
+}
+
+# Checkout samples taken before the shell sample belong to the acquisition; the
+# ones after it come from Treehouse's release of the slot, which runs under the
+# same reservation.
+acquisition_checkout_samples() {
+  sed '/^shell /q' "$PROBE_LOG" | grep '^checkout ' || true
+}
+
+assert_no_checkout_read_acquired() {  # <description>
+  if acquisition_checkout_samples | grep -q '^checkout acquired '; then
+    fail "$1: the slot read as acquired while its checkout was still running: $(cat "$PROBE_LOG")"
+  fi
 }
 
 test_new_slot_reads_acquired_only_after_its_checkout() {
   local slot
   : > "$PROBE_LOG"
-  slot=$(check_acquisition "new slot" 1) || exit 1
-  if slot_acquired_now "$slot"; then
-    fail "new slot: still read as acquired after treehouse get exited"
-  fi
+  slot=$(acquire_slot "new slot") || exit 1
+  [ -n "$(acquisition_checkout_samples)" ] \
+    || fail "new slot: the post-checkout hook never sampled the slot during acquisition: $(cat "$PROBE_LOG")"
+  assert_no_checkout_read_acquired "new slot"
+  ! slot_acquired_now "$slot" || fail "new slot: still read as acquired after treehouse get exited"
   pass "real treehouse $(treehouse --version 2>/dev/null): a new slot reads acquired only after its checkout, and not after release"
 }
 
 test_reused_slot_reads_acquired_only_after_its_reset() {
-  local slot
   : > "$PROBE_LOG"
-  slot=$(check_acquisition "reused slot" 0) || exit 1
-  if slot_acquired_now "$slot"; then
-    fail "reused slot: still read as acquired after treehouse get exited"
-  fi
+  acquire_slot "reused slot" >/dev/null || exit 1
+  assert_no_checkout_read_acquired "reused slot"
   pass "real treehouse $(treehouse --version 2>/dev/null): a reused slot reads acquired only once treehouse hands it over"
 }
 
