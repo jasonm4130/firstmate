@@ -100,6 +100,7 @@ test_new_slot_reads_acquired_only_after_its_checkout() {
   local slot
   : > "$PROBE_LOG"
   slot=$(acquire_slot "new slot") || exit 1
+  FIRST_SLOT=$slot
   [ -n "$(acquisition_checkout_samples)" ] \
     || fail "new slot: the post-checkout hook never sampled the slot during acquisition: $(cat "$PROBE_LOG")"
   assert_no_checkout_read_acquired "new slot"
@@ -108,8 +109,11 @@ test_new_slot_reads_acquired_only_after_its_checkout() {
 }
 
 test_reused_slot_reads_acquired_only_after_its_reset() {
+  local slot
   : > "$PROBE_LOG"
-  acquire_slot "reused slot" >/dev/null || exit 1
+  slot=$(acquire_slot "reused slot") || exit 1
+  [ "$slot" = "$FIRST_SLOT" ] \
+    || fail "reused slot: treehouse handed over '$slot' instead of reusing the first acquisition's '$FIRST_SLOT'"
   assert_no_checkout_read_acquired "reused slot"
   pass "real treehouse $(treehouse --version 2>/dev/null): a reused slot reads acquired only once treehouse hands it over"
 }
