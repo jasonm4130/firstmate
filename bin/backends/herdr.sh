@@ -1465,6 +1465,35 @@ fm_backend_herdr_pane_idle_shell_sample() {  # <session> <pane-id>
   printf '%s\n' "$shell_pid"
 }
 
+# fm_backend_herdr_pane_runs_treehouse_get: true when one read of <pane-id>'s
+# process tree finds a `treehouse get` below the pane shell, run directly or
+# through an interpreter. Any unreadable step reads false.
+fm_backend_herdr_pane_runs_treehouse_get() {  # <session> <pane-id>
+  local info shell_pid ps_bin rows
+  info=$(fm_backend_herdr_cli "$1" pane process-info --pane "$2" 2>/dev/null) || return 1
+  shell_pid=$(printf '%s' "$info" | jq -er --arg pane "$2" '
+    .result.process_info
+    | select(.pane_id == $pane)
+    | .shell_pid | select(type == "number" and . > 1) | floor' 2>/dev/null) || return 1
+  ps_bin=${FM_HERDR_PS_BIN:-ps}
+  rows=$(LC_ALL=C "$ps_bin" -axww -o pid=,ppid=,args= 2>/dev/null) || return 1
+  printf '%s\n' "$rows" | awk -v shell="$shell_pid" '
+    { ppid[$1] = $2; line = $0; sub(/^[ \t]*[0-9]+[ \t]+[0-9]+[ \t]*/, "", line); args[$1] = line }
+    END {
+      for (pid in args) {
+        p = pid
+        for (hops = 0; hops < 16 && p != shell && p in ppid; hops++) p = ppid[p]
+        if (p != shell || pid == shell) continue
+        n = split(args[pid], word, /[ \t]+/)
+        for (i = 1; i < n; i++) {
+          sub(/.*\//, "", word[i])
+          if (word[i] == "treehouse" && word[i + 1] == "get") exit 0
+        }
+      }
+      exit 1
+    }'
+}
+
 # fm_backend_herdr_projection_order_best_effort: place the exact workspace id
 # returned by THIS projected create immediately after its owning parent's
 # contiguous child block and before the next parent.

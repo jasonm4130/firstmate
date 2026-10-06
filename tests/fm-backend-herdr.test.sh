@@ -562,6 +562,53 @@ test_registered_agent_with_a_live_foreground_process_stays_alive() {
   pass "herdr stale registration: a registered agent with a live Pi foreground process still reads alive"
 }
 
+# --- an aborted spawn's pane and its `treehouse get` --------------------------
+#
+# bin/fm-spawn.sh keeps an aborted herdr task pane open only while a
+# `treehouse get` still runs under the pane shell, because closing the pane
+# hangs up the slot checkout. A `treehouse get` that already failed must not
+# keep the pane. Real processes stand in for the pane shell and treehouse.
+
+treehouse_get_pane_case() {  # <dir-suffix> <treehouse-exit-at-once:0|1>
+  local dir="$TMP_ROOT/treehouse-get-$1" resp log fb shell_pid sleep_pid out
+  mkdir -p "$dir/responses" "$dir/bin"; resp="$dir/responses"; log="$dir/log"; : > "$log"
+  if [ "$2" = 1 ]; then
+    printf '#!/bin/sh\nexit 1\n' > "$dir/bin/treehouse"
+  else
+    printf '#!/bin/sh\nsleep 300 &\necho $! > "%s"\nwait\n' "$dir/sleep.pid" > "$dir/bin/treehouse"
+  fi
+  chmod +x "$dir/bin/treehouse"
+  bash -c '"$0" get; [ "$1" = 0 ] || { sleep 300 & echo $! > "$2"; wait; }; :' \
+    "$dir/bin/treehouse" "$2" "$dir/sleep.pid" &
+  shell_pid=$!
+  while [ ! -s "$dir/sleep.pid" ]; do sleep 0.05; done
+  sleep_pid=$(cat "$dir/sleep.pid")
+  shell_only_process_info "$shell_pid" > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$(PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"
+      fm_backend_herdr_pane_runs_treehouse_get fmtest w1:p2 && printf running || printf idle' "$ROOT")
+  kill "$sleep_pid" 2>/dev/null || true
+  wait "$shell_pid" 2>/dev/null || true
+  printf '%s' "$out"
+}
+
+test_pane_with_treehouse_get_still_running_is_kept() {
+  local out
+  out=$(treehouse_get_pane_case running 0)
+  [ "$out" = running ] \
+    || fail "a pane with treehouse get still running under its shell must read running, got '$out'"
+  pass "herdr aborted spawn: a pane with treehouse get still running reads running"
+}
+
+test_pane_whose_treehouse_get_failed_fast_is_not_kept() {
+  local out
+  out=$(treehouse_get_pane_case failed-fast 1)
+  [ "$out" = idle ] \
+    || fail "a pane whose treehouse get already exited must read idle so the abort closes it, got '$out'"
+  pass "herdr aborted spawn: a pane whose treehouse get failed at once reads idle"
+}
+
 # --- the bound agent session reference (relaunch session continuity) --------
 #
 # Herdr applies only reports carrying the session identity it bound to a pane,
@@ -5872,6 +5919,8 @@ test_stale_registration_ignores_status_and_reads_the_process
 test_pane_agent_session_ref_reports_a_resumable_reference_with_its_agent
 test_pane_agent_session_ref_degrades_to_nothing_when_not_resumable
 test_registered_agent_with_a_live_foreground_process_stays_alive
+test_pane_with_treehouse_get_still_running_is_kept
+test_pane_whose_treehouse_get_failed_fast_is_not_kept
 test_registered_agent_with_a_non_shell_foreground_process_stays_alive
 test_transient_prompt_helper_settles_into_stale_agent
 test_exhausted_settle_window_keeps_a_non_shell_foreground_live

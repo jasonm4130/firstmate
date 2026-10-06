@@ -277,9 +277,9 @@
 #   naming the last path seen and why it was rejected.
 #   A read inside a Treehouse pool slot is adopted only once Treehouse's pool
 #   state records that slot acquired, because a pane read can land on a git
-#   process still checking the slot out. A refusal at the end of the wait leaves
-#   a herdr task pane open when its last read fits `treehouse get` still
-#   working, rather than hang up a checkout in progress.
+#   process still checking the slot out. An aborted spawn leaves a herdr task
+#   pane open while a `treehouse get` still runs in it, rather than hang up a
+#   checkout in progress.
 #   That placement is proven only at launch. Every ship or scout pane therefore
 #   also receives `export FM_TASK_ID=<task-id>` before the launch command, on
 #   the same channel as GOTMPDIR, and bin/fm-test-run.sh refuses to execute the
@@ -1287,7 +1287,6 @@ CONFIG_INHERIT_LOCK_HELD=0
 GIT_HOOKS_DIR=
 SPAWN_LAUNCH_SENT=0
 SPAWN_ENDPOINT_CLOSED=0
-SPAWN_TREEHOUSE_GET_PENDING=0
 
 spawn_fresh_commit_rollback() {
   if fm_backlog_atomic_transition rollback "$STATE/$ID.meta" \
@@ -1345,9 +1344,10 @@ spawn_abort_cleanup() {
   # Closing the pane hangs up `treehouse get` and the git checkout under it. Git
   # then drops the slot's registration but leaves the half-written slot, which
   # Treehouse quarantines and the next slot's registration can take over.
-  if [ "$HERDR_PROJECTION_ABORT_CLEANUP" = 1 ] && [ "$SPAWN_TREEHOUSE_GET_PENDING" = 1 ]; then
+  if [ "$HERDR_PROJECTION_ABORT_CLEANUP" = 1 ] && [ -n "$HERDR_PROJECTION_ABORT_TASK_PANE" ] &&
+    fm_backend_herdr_pane_runs_treehouse_get "$HERDR_PROJECTION_ABORT_SESSION" "$HERDR_PROJECTION_ABORT_TASK_PANE"; then
     HERDR_PROJECTION_ABORT_CLEANUP=0
-    echo "warning: leaving herdr pane ${HERDR_PROJECTION_ABORT_TASK_PANE:-unknown} open because treehouse get may still be checking out a slot; close it once treehouse has finished" >&2
+    echo "warning: leaving herdr pane $HERDR_PROJECTION_ABORT_TASK_PANE open because treehouse get is still running in it; close it once treehouse has finished" >&2
   fi
   if [ "$HERDR_PROJECTION_ABORT_CLEANUP" = 1 ] &&
     [ "$HERDR_PRESENTATION_ORDER_LOCK_HELD" != 1 ]; then
@@ -3453,20 +3453,6 @@ spawn_worktree_ready() { # <path>
   fm_treehouse_slot_acquired "$1"
 }
 
-# True when the pane's last discovery read fits `treehouse get` still working:
-# no read, the spawning project where treehouse itself runs, or the repository
-# primary or an unacquired pool slot where its git processes run. Closing the
-# pane then would hang up a checkout in progress.
-spawn_treehouse_get_may_be_running() { # <last-seen-path>
-  local seen=$1 git_dir common
-  [ -n "$seen" ] || return 0
-  [ "$(real_path_or_raw "$seen")" != "$PROJ_ABS_REAL" ] || return 0
-  spawn_worktree_ready "$seen" || return 0
-  git_dir=$(git -C "$seen" rev-parse --absolute-git-dir 2>/dev/null) || return 1
-  common=$(git -C "$PROJ_ABS" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 1
-  [ "$(real_path_or_raw "$git_dir")" = "$(real_path_or_raw "$common")" ]
-}
-
 validate_spawn_worktree() { # <source> <inspect-target>
   local source=$1 inspect_target=$2
   if ! spawn_worktree_isolated "$WT"; then
@@ -4514,7 +4500,6 @@ elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
     sleep 1
   done
   if [ -z "$WT" ]; then
-    spawn_treehouse_get_may_be_running "$last_seen" && SPAWN_TREEHOUSE_GET_PENDING=1
     echo "error: treehouse get did not enter an isolated worktree within 60s (last seen '${last_seen:-none}': $last_reason; spawning project '$PROJ_ABS'); inspect window $T" >&2
     exit 1
   fi
