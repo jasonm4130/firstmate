@@ -275,6 +275,11 @@
 #   itself a linked worktree of the project repository still launches. A pane
 #   that never reaches an isolated worktree refuses at the end of that wait,
 #   naming the last path seen and why it was rejected.
+#   A read inside a Treehouse pool slot is adopted only once Treehouse's pool
+#   state records that slot acquired, because a pane read can land on a git
+#   process still checking the slot out. A refusal at the end of the wait leaves
+#   a herdr task pane open when its last read fits `treehouse get` still
+#   working, rather than hang up a checkout in progress.
 #   That placement is proven only at launch. Every ship or scout pane therefore
 #   also receives `export FM_TASK_ID=<task-id>` before the launch command, on
 #   the same channel as GOTMPDIR, and bin/fm-test-run.sh refuses to execute the
@@ -1282,6 +1287,7 @@ CONFIG_INHERIT_LOCK_HELD=0
 GIT_HOOKS_DIR=
 SPAWN_LAUNCH_SENT=0
 SPAWN_ENDPOINT_CLOSED=0
+SPAWN_TREEHOUSE_GET_PENDING=0
 
 spawn_fresh_commit_rollback() {
   if fm_backlog_atomic_transition rollback "$STATE/$ID.meta" \
@@ -1335,6 +1341,13 @@ spawn_abort_cleanup() {
         echo "warning: could not retire replacement busy generation after aborted relaunch of $ID" >&2
       fi
     fi
+  fi
+  # Closing the pane hangs up `treehouse get` and the git checkout under it. Git
+  # then drops the slot's registration but leaves the half-written slot, which
+  # Treehouse quarantines and the next slot's registration can take over.
+  if [ "$HERDR_PROJECTION_ABORT_CLEANUP" = 1 ] && [ "$SPAWN_TREEHOUSE_GET_PENDING" = 1 ]; then
+    HERDR_PROJECTION_ABORT_CLEANUP=0
+    echo "warning: leaving herdr pane ${HERDR_PROJECTION_ABORT_TASK_PANE:-unknown} open because treehouse get may still be checking out a slot; close it once treehouse has finished" >&2
   fi
   if [ "$HERDR_PROJECTION_ABORT_CLEANUP" = 1 ] &&
     [ "$HERDR_PRESENTATION_ORDER_LOCK_HELD" != 1 ]; then
@@ -3429,6 +3442,31 @@ spawn_worktree_isolated() { # <path>
   return 0
 }
 
+# A slot inside a Treehouse pool is ready only once Treehouse records it
+# acquired (fm_treehouse_slot_acquired); a path outside any pool keeps the
+# isolation test alone. The pool is recognized by the state lock Treehouse takes
+# before it creates a slot, because the state file itself is first written after.
+spawn_worktree_ready() { # <path>
+  local slot
+  slot=$(real_path_or_raw "$1")
+  [ -e "$(dirname "$(dirname "$slot")")/treehouse-state.lock" ] || return 0
+  fm_treehouse_slot_acquired "$1"
+}
+
+# True when the pane's last discovery read fits `treehouse get` still working:
+# no read, the spawning project where treehouse itself runs, or the repository
+# primary or an unacquired pool slot where its git processes run. Closing the
+# pane then would hang up a checkout in progress.
+spawn_treehouse_get_may_be_running() { # <last-seen-path>
+  local seen=$1 git_dir common
+  [ -n "$seen" ] || return 0
+  [ "$(real_path_or_raw "$seen")" != "$PROJ_ABS_REAL" ] || return 0
+  spawn_worktree_ready "$seen" || return 0
+  git_dir=$(git -C "$seen" rev-parse --absolute-git-dir 2>/dev/null) || return 1
+  common=$(git -C "$PROJ_ABS" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 1
+  [ "$(real_path_or_raw "$git_dir")" = "$(real_path_or_raw "$common")" ]
+}
+
 validate_spawn_worktree() { # <source> <inspect-target>
   local source=$1 inspect_target=$2
   if ! spawn_worktree_isolated "$WT"; then
@@ -4445,6 +4483,10 @@ elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   # read of the project itself or of the repository primary checkout is treated
   # as the transient it is and the wait continues, instead of being adopted and
   # then refused by the guard.
+  # A slot inside a Treehouse pool must also be recorded acquired by Treehouse:
+  # a backend that reports a foreground child's cwd (herdr before 0.9.0) shows
+  # the slot while git is still checking it out, or while Treehouse's recovery
+  # check inspects a quarantined slot, and neither is a slot ready to use.
   # A candidate the screen rejects is never adopted, so a host where the pane
   # never reaches an isolated worktree spends the whole window before refusing.
   # That wait is deliberate - telling a transient apart from a terminal
@@ -4457,7 +4499,7 @@ elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   for _ in $(seq 1 60); do
     p=$(spawn_current_path "$WT_TARGET" || true)
     [ -z "$p" ] || last_seen="$p"
-    if [ -n "$p" ] && spawn_worktree_isolated "$p"; then
+    if [ -n "$p" ] && spawn_worktree_isolated "$p" && spawn_worktree_ready "$p"; then
       p_real=$(real_path_or_raw "$p")
       last_reason="it is an isolated worktree, but no second read agreed with it"
       if [ -n "$candidate" ] && [ "$p_real" = "$candidate" ]; then
@@ -4467,11 +4509,12 @@ elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
       candidate="$p_real"
     else
       candidate=""
-      [ -z "$p" ] || last_reason=$SPAWN_WT_REASON
+      [ -z "$p" ] || last_reason=${SPAWN_WT_REASON:-Treehouse has not finished acquiring it}
     fi
     sleep 1
   done
   if [ -z "$WT" ]; then
+    spawn_treehouse_get_may_be_running "$last_seen" && SPAWN_TREEHOUSE_GET_PENDING=1
     echo "error: treehouse get did not enter an isolated worktree within 60s (last seen '${last_seen:-none}': $last_reason; spawning project '$PROJ_ABS'); inspect window $T" >&2
     exit 1
   fi
