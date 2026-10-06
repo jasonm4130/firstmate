@@ -1585,17 +1585,23 @@ fm_treehouse_pool_slot() {  # <project-dir> <worktree>
 # pool is recognized by the state lock Treehouse takes before it creates a slot,
 # because the state file itself is first written after.
 fm_treehouse_slot_acquired() {  # <worktree>
-  local slot pool state owner path real
+  local slot pool
   slot=$(CDPATH='' cd -- "$1" 2>/dev/null && pwd -P) || return 1
   pool=$(dirname "$(dirname "$slot")")
   [ -e "$pool/treehouse-state.lock" ] || return 0
-  state="$pool/treehouse-state.json"
-  [ -f "$state" ] && [ ! -L "$state" ] || return 1
-  while IFS=$'\t' read -r owner path; do
-    real=$(CDPATH='' cd -- "$path" 2>/dev/null && pwd -P) || continue
-    [ "$real" = "$slot" ] && kill -0 "$owner" 2>/dev/null && return 0
-  done < <(jq -r '.worktrees[]? | select((.leased // false) == false and (.owner_pid // 0) > 0) | "\(.owner_pid)\t\(.path)"' "$state" 2>/dev/null)
-  return 1
+  fm_treehouse_live_owned_slots "$pool" | grep -Fqx -- "$slot"
+}
+
+# fm_treehouse_live_owned_slots: print the physical path of every slot in
+# <pool> that its state lists under a live owner reservation and no lease.
+fm_treehouse_live_owned_slots() {  # <pool-dir>
+  local state="$1/treehouse-state.json" owner path
+  [ -f "$state" ] && [ ! -L "$state" ] || return 0
+  jq -r '.worktrees[]? | select((.leased // false) == false and (.owner_pid // 0) > 0) | "\(.owner_pid)\t\(.path)"' "$state" 2>/dev/null |
+    while IFS=$'\t' read -r owner path; do
+      kill -0 "$owner" 2>/dev/null || continue
+      CDPATH='' cd -- "$path" 2>/dev/null && pwd -P
+    done
 }
 
 # Slot-owner claim: which task a Treehouse pool slot currently belongs to.
