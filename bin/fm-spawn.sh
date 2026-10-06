@@ -277,9 +277,10 @@
 #   naming the last path seen and why it was rejected.
 #   A read inside a Treehouse pool slot is adopted only once Treehouse's pool
 #   state records that slot acquired, because a pane read can land on a git
-#   process still checking the slot out. An aborted spawn leaves a herdr task
-#   pane open while a `treehouse get` still runs in it, rather than hang up a
-#   checkout in progress.
+#   process still checking the slot out. A spawn that aborts before the wait
+#   adopts a slot leaves a herdr task pane open while a `treehouse get` still
+#   runs in it, rather than hang up a checkout in progress. Any later abort
+#   closes the pane, which also ends `treehouse get` and returns the slot.
 #   That placement is proven only at launch. Every ship or scout pane therefore
 #   also receives `export FM_TASK_ID=<task-id>` before the launch command, on
 #   the same channel as GOTMPDIR, and bin/fm-test-run.sh refuses to execute the
@@ -1341,10 +1342,13 @@ spawn_abort_cleanup() {
       fi
     fi
   fi
-  # Closing the pane hangs up `treehouse get` and the git checkout under it. Git
-  # then drops the slot's registration but leaves the half-written slot, which
-  # Treehouse quarantines and the next slot's registration can take over.
-  if [ "$HERDR_PROJECTION_ABORT_CLEANUP" = 1 ] && [ -n "$HERDR_PROJECTION_ABORT_TASK_PANE" ] &&
+  # Before the discovery wait adopts a slot, closing the pane can hang up the git
+  # checkout under `treehouse get`. Git then drops the slot's registration but
+  # leaves the half-written slot, which Treehouse quarantines and the next
+  # slot's registration can take over. After adoption, `treehouse get` is only
+  # the parent of the slot shell, and closing the pane returns the slot.
+  if [ "$HERDR_PROJECTION_ABORT_CLEANUP" = 1 ] && [ -z "${WT:-}" ] &&
+    [ -n "$HERDR_PROJECTION_ABORT_TASK_PANE" ] &&
     fm_backend_herdr_pane_runs_treehouse_get "$HERDR_PROJECTION_ABORT_SESSION" "$HERDR_PROJECTION_ABORT_TASK_PANE"; then
     HERDR_PROJECTION_ABORT_CLEANUP=0
     echo "warning: leaving herdr pane $HERDR_PROJECTION_ABORT_TASK_PANE open because treehouse get is still running in it; close it once treehouse has finished" >&2
