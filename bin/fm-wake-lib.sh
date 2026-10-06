@@ -1576,15 +1576,20 @@ fm_treehouse_pool_slot() {  # <project-dir> <worktree>
   [ "$project_common" = "$slot_common" ]
 }
 
-# True once Treehouse has finished an interactive acquisition of <worktree>: its
-# pool state lists the slot under a live owner reservation and no lease. That
-# entry is published only after the slot's checkout and seeding complete, so it
-# is the readiness signal; a process cwd inside the slot is not, because the git
-# processes that create or inspect a slot run there first.
+# True when <worktree> is ready as far as Treehouse is concerned: it lies outside
+# any Treehouse pool, or Treehouse has finished an interactive acquisition of it,
+# meaning its pool state lists the slot under a live owner reservation and no
+# lease. That entry is published only after the slot's checkout and seeding
+# complete, so it is the readiness signal; a process cwd inside the slot is not,
+# because the git processes that create or inspect a slot run there first. A
+# pool is recognized by the state lock Treehouse takes before it creates a slot,
+# because the state file itself is first written after.
 fm_treehouse_slot_acquired() {  # <worktree>
-  local slot state owner path real
+  local slot pool state owner path real
   slot=$(CDPATH='' cd -- "$1" 2>/dev/null && pwd -P) || return 1
-  state="$(dirname "$(dirname "$slot")")/treehouse-state.json"
+  pool=$(dirname "$(dirname "$slot")")
+  [ -e "$pool/treehouse-state.lock" ] || return 0
+  state="$pool/treehouse-state.json"
   [ -f "$state" ] && [ ! -L "$state" ] || return 1
   while IFS=$'\t' read -r owner path; do
     real=$(CDPATH='' cd -- "$path" 2>/dev/null && pwd -P) || continue

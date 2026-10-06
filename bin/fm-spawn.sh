@@ -3446,17 +3446,6 @@ spawn_worktree_isolated() { # <path>
   return 0
 }
 
-# A slot inside a Treehouse pool is ready only once Treehouse records it
-# acquired (fm_treehouse_slot_acquired); a path outside any pool keeps the
-# isolation test alone. The pool is recognized by the state lock Treehouse takes
-# before it creates a slot, because the state file itself is first written after.
-spawn_worktree_ready() { # <path>
-  local slot
-  slot=$(real_path_or_raw "$1")
-  [ -e "$(dirname "$(dirname "$slot")")/treehouse-state.lock" ] || return 0
-  fm_treehouse_slot_acquired "$1"
-}
-
 validate_spawn_worktree() { # <source> <inspect-target>
   local source=$1 inspect_target=$2
   if ! spawn_worktree_isolated "$WT"; then
@@ -4489,7 +4478,7 @@ elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   for _ in $(seq 1 60); do
     p=$(spawn_current_path "$WT_TARGET" || true)
     [ -z "$p" ] || last_seen="$p"
-    if [ -n "$p" ] && spawn_worktree_isolated "$p" && spawn_worktree_ready "$p"; then
+    if [ -n "$p" ] && spawn_worktree_isolated "$p" && fm_treehouse_slot_acquired "$p"; then
       p_real=$(real_path_or_raw "$p")
       last_reason="it is an isolated worktree, but no second read agreed with it"
       if [ -n "$candidate" ] && [ "$p_real" = "$candidate" ]; then
