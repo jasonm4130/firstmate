@@ -115,7 +115,8 @@ test_reused_slot_reads_acquired_only_after_its_reset() {
   [ "$slot" = "$FIRST_SLOT" ] \
     || fail "reused slot: treehouse handed over '$slot' instead of reusing the first acquisition's '$FIRST_SLOT'"
   assert_no_checkout_read_acquired "reused slot"
-  pass "real treehouse $(treehouse --version 2>/dev/null): a reused slot reads acquired only once treehouse hands it over"
+  ! slot_acquired_now "$slot" || fail "reused slot: still read as acquired after treehouse get exited"
+  pass "real treehouse $(treehouse --version 2>/dev/null): a reused slot reads acquired only once treehouse hands it over, and not after release"
 }
 
 test_new_slot_reads_acquired_only_after_its_checkout
