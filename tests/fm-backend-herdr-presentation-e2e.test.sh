@@ -932,8 +932,11 @@ lab pane get "$HOLD_PANE" >/dev/null 2>&1 \
 [ ! -e "$HOME_DIR/state/abort-hold.meta" ] || fail "held-get abort fixture published task metadata before launch"
 assert_focus_is "$CAPTAIN_FOCUS" "abort with treehouse get still running"
 rm -rf "$POST_CREATE_ABORT_CONTROL"
+# This plain close empties a non-focused workspace, which moves focus to its
+# neighbor on Herdr releases before 0.8.0, so restore the captain's tab.
 lab pane close "$HOLD_PANE" >/dev/null 2>&1 || fail "could not close kept task pane $HOLD_PANE after the test"
 rm -f "$HOME_DIR/state/abort-hold.herdr-presentation"
+lab tab focus "$SECOND_TWO_TAB" >/dev/null || fail "could not restore the captured captain tab after closing the kept task pane"
 assert_focus_is "$CAPTAIN_FOCUS" "closing the kept task pane"
 pass "real Herdr lab: an abort while treehouse get still runs leaves its task pane open"
 
