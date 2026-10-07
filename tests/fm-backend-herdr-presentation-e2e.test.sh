@@ -210,7 +210,7 @@ set -u
   done
   printf '\n'
 } >> "$TREEHOUSE_CALL_LOG"
-if [ -d "$POST_CREATE_ABORT_CONTROL" ] && [ "${1:-}" = get ]; then
+if [ -d "$POST_CREATE_ABORT_CONTROL" ] && [ ! -e "$POST_CREATE_ABORT_CONTROL/hold-get" ] && [ "${1:-}" = get ]; then
   exit 0
 fi
 # Treehouse's pool allocator is outside the Herdr concurrency contract under
