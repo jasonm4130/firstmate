@@ -1,0 +1,13 @@
+lab: /private/tmp/fmlab.WHZDyD (tear down with: bin/fm-live-lab.sh down /private/tmp/fmlab.WHZDyD)
+tree: c624f034225f779a49f823411c1c896ace2355c1 from /Users/jasonmatthew/.no-mistakes/worktrees/1bc2b7ffb15a/01M4DJACQEEKTSN01YJ0ZA5054
+spawned labd1dd71aa86e4-worker harness=claude kind=ship mode=local-only yolo=on window=firstmate:fm-labd1dd71aa86e4-worker worktree=/private/tmp/fmlab.WHZDyD/treehouse/.treehouse/notes-d039db/1/notes
+gate: /private/tmp/fmlab.WHZDyD/home/data/labd1dd71aa86e4-worker/gate (touch, then message the worker to resume)
+primary: claude --setting-sources project,local --model sonnet --effort medium --permission-mode auto
+ok primary: claude pid 42282 in /private/tmp/fmlab.WHZDyD/home
+ok probe: the primary answered LABREADY-d1dd71aa86e4
+ok trust: /private/tmp/fmlab.WHZDyD/home is trusted in the Claude store
+fail host: supervision host pid 53925 runs (expected none)
+ok watcher: live watcher with a fresh beacon
+ok worker: labd1dd71aa86e4-worker parked on /private/tmp/fmlab.WHZDyD/home/data/labd1dd71aa86e4-worker/gate
+ok treehouse: ~/.treehouse unchanged
+not ready after 600s; the lab is left up for inspection: bin/fm-live-lab.sh pane /private/tmp/fmlab.WHZDyD, then bin/fm-live-lab.sh down /private/tmp/fmlab.WHZDyD

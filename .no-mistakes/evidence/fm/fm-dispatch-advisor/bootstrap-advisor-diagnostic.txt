@@ -1,0 +1,41 @@
+$ config: {"rules":[{"when":"research","use":{"harness":"claude","model":"claude-opus-5-5","advisor":"sonnet"}}]}
+CREW_DISPATCH: invalid config/crew-dispatch.json - invalid advisor: advisor sonnet ranks below main model claude-opus-5-5 in Claude Code's advisor pairing table, so the worker would run without it
+
+$ config: {
+  "rules": [
+    {
+      "when": "The task depends on fresh news, current events, live public facts, or recent market and product changes.",
+      "use": { "harness": "grok" },
+      "why": "Grok is the preferred dispatch when current web-connected context is central to the work."
+    },
+    {
+      "when": "The task is a trivial mechanical edit such as a rote rename, formatting sweep, targeted typo fix, or simple file gathering.",
+      "use": { "harness": "claude", "model": "haiku", "effort": "low" },
+      "why": "Use the cheapest fast profile when the task is narrow and low ambiguity."
+    },
+    {
+      "when": "The task is a big or ambiguous multi-file feature, a risky refactor, or work that requires holding many moving parts in mind.",
+      "use": [
+        { "harness": "claude", "model": "claude-sonnet-5", "effort": "high" },
+        { "harness": "codex", "model": "gpt-5.5", "effort": "high" }
+      ],
+      "why": "Use a strong coding profile for big, ambiguous work; resolve the alternatives through quota-array-dispatch."
+    },
+    {
+      "when": "The task is long multi-step research or investigation where most turns are routine but the plan and the final judgment decide the outcome.",
+      "use": { "harness": "claude", "model": "claude-haiku-5-5", "effort": "low", "advisor": "opus" },
+      "why": "A fast main model that consults a stronger Claude Code advisor at decision points; advisor applies only to claude profiles."
+    }
+  ],
+  "default": [
+    { "harness": "codex", "model": "gpt-5.5", "effort": "medium" },
+    { "harness": "pi", "model": "anthropic/claude-sonnet-5", "effort": "medium", "provider": "claude" }
+  ]
+}
+BOOTSTRAP_INFO: crew dispatch active config/crew-dispatch.json
+BOOTSTRAP_INFO: crew dispatch rule: The task depends on fresh news, current events, live public facts, or recent market and product changes. -> grok
+BOOTSTRAP_INFO: crew dispatch rule: The task is a trivial mechanical edit such as a rote rename, formatting sweep, targeted typo fix, or simple file gathering. -> claude/haiku/low
+BOOTSTRAP_INFO: crew dispatch rule: The task is a big or ambiguous multi-file feature, a risky refactor, or work that requires holding many moving parts in mind. -> quota-balanced[claude/claude-sonnet-5/high, codex/gpt-5.5/high]
+BOOTSTRAP_INFO: crew dispatch rule: The task is long multi-step research or investigation where most turns are routine but the plan and the final judgment decide the outcome. -> claude/claude-haiku-5-5/low+advisor=opus
+BOOTSTRAP_INFO: crew dispatch default: quota-balanced[codex/gpt-5.5/medium, pi/anthropic/claude-sonnet-5/medium]
+

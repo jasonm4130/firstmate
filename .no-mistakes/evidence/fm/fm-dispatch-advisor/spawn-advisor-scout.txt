@@ -1,0 +1,10 @@
+$ fm-spawn.sh labd1dd71aa86e4-adv projects/notes --scout --harness claude --model claude-haiku-5-5 --effort low --advisor opus
+spawned labd1dd71aa86e4-adv harness=claude kind=scout window=firstmate:fm-labd1dd71aa86e4-adv worktree=/private/tmp/fmlab.WHZDyD/treehouse/.treehouse/notes-d039db/2/notes
+exit=0
+
+--- state/labd1dd71aa86e4-adv.meta (model/effort/advisor/harness)
+harness=claude
+kind=scout
+model=claude-haiku-5-5
+effort=low
+advisor=opus

@@ -1,0 +1,20 @@
+$ config: {"rules":[{"when":"research","use":{"harness":"claude","model":"claude-opus-5-5","advisor":"sonnet"}}]}
+error: malformed rules file: /tmp/fm-adv-home.j3dr8U/home/config/crew-dispatch.json - use profile advisor sonnet ranks below main model claude-opus-5-5 in Claude Code's advisor pairing table, so the worker would run without it
+exit=
+
+$ config: {"rules":[{"when":"research","use":{"harness":"codex","model":"gpt-5.5","advisor":"opus"}}]}
+error: malformed rules file: /tmp/fm-adv-home.j3dr8U/home/config/crew-dispatch.json - use profile advisor applies only to the claude harness, not codex
+exit=
+
+$ config: {"rules":[{"when":"research","use":{"harness":"claude","model":"claude-haiku-5-5","advisor":"claude-haiku-4-5"}}]}
+error: malformed rules file: /tmp/fm-adv-home.j3dr8U/home/config/crew-dispatch.json - use profile advisor claude-haiku-4-5 cannot act as an advisor (Haiku before 5.5)
+exit=
+
+$ config: {"rules":[{"when":"research","use":{"harness":"claude","model":"claude-haiku-5-5","advisor":"haiku"}}]}
+error: malformed rules file: /tmp/fm-adv-home.j3dr8U/home/config/crew-dispatch.json - use profile advisor haiku must be fable, opus, sonnet, or a full claude-* model id
+exit=
+
+$ config: {"rules":[{"when":"x","use":{"harness":"claude"}}],"default":{"harness":"claude","model":"claude-sonnet-5-5","advisor":"claude-opus-4-8"}}
+error: malformed rules file: /tmp/fm-adv-home.j3dr8U/home/config/crew-dispatch.json - default profile advisor claude-opus-4-8 ranks below main model claude-sonnet-5-5 in Claude Code's advisor pairing table, so the worker would run without it
+exit=
+

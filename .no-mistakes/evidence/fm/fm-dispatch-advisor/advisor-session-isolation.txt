@@ -1,0 +1,7 @@
+slot 2 transcript: aac57013-b0fc-4621-8ace-1a61f80e79a0.jsonl
+  advisorModel values: "advisorModel":"claude-opus-5-5" 
+  model values: "model":"claude-haiku-5-5" "model":"claude-opus-5-5" 
+slot 1 transcript: 80c2ee95-8ef6-4934-84cf-93f5ff3f20f3.jsonl
+  advisorModel values: "advisorModel":"claude-opus-5-5" 
+  model values: "model":"claude-sonnet-5-5" 
+operator saved advisorModel in ~/.claude/settings.json: absent

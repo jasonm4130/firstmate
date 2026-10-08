@@ -1,0 +1,41 @@
+--- adversarial: relaunch to a below-rank advisor (opus main, sonnet advisor) must refuse before the old agent stops
+error: relaunching labd1dd71aa86e4-adv: advisor sonnet ranks below main model claude-opus-5-5 in Claude Code's advisor pairing table, so the worker would run without it; pass --advisor default to relaunch without one, or name another
+exit=1
+pids still running with --advisor opus: 1
+model=claude-haiku-5-5
+advisor=opus
+
+--- relaunch with --advisor sonnet (haiku main kept)
+NOTICE: wake rows held by the live supervision branch - it presents and acknowledges them; do not drain them from here.
+relaunched labd1dd71aa86e4-adv harness=claude from=claude model=claude-haiku-5-5 effort=low advisor=sonnet backend=tmux endpoint=firstmate:fm-labd1dd71aa86e4-adv worktree=/private/tmp/fmlab.WHZDyD/treehouse/.treehouse/notes-d039db/2/notes
+exit=0
+harness=claude
+model=claude-haiku-5-5
+effort=low
+advisor=sonnet
+--model claude-haiku-5-5 --effort low --advisor sonnet
+6b4a9498-0575-446e-ada1-ba03619d6024.jsonl:    3 "advisorModel":"claude-sonnet-5-5" 
+aac57013-b0fc-4621-8ace-1a61f80e79a0.jsonl:   15 "advisorModel":"claude-opus-5-5" 
+
+--- relaunch with no --advisor (stays on claude): recorded advisor must be kept
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  WATCHER DOWN - SUPERVISION IS OFF
+●  2 task(s) in flight, but no live watcher process holds this home lock (last beat: 18s ago).
+●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair.
+●  This is a supervision warning only; the guarded operation WILL still run.
+●  repair missing watcher supervision according to the session-start block for this harness; do not use shell &.
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+relaunched labd1dd71aa86e4-adv harness=claude from=claude model=claude-haiku-5-5 effort=low advisor=sonnet backend=tmux endpoint=firstmate:fm-labd1dd71aa86e4-adv worktree=/private/tmp/fmlab.WHZDyD/treehouse/.treehouse/notes-d039db/2/notes
+advisor=sonnet
+--model claude-haiku-5-5 --effort low --advisor sonnet
+
+--- relaunch --advisor default: clears it
+error: task labd1dd71aa86e4-adv's composer visibly holds pending text; refusing to type the /exit exit command because it would concatenate onto that text. Clear or submit the pending text, then retry 'relaunch'
+error: relaunch of labd1dd71aa86e4-adv failed while stopping the old agent, which is still running; its original instructions were restored
+advisor line in meta: 1
+--model claude-haiku-5-5 --effort low ADVISOR! sonnet : Firstmate 
+
+--- retry: relaunch --advisor default (after the worker's own turn finished)
+relaunched labd1dd71aa86e4-adv harness=claude from=claude model=claude-haiku-5-5 effort=low advisor=default backend=tmux endpoint=firstmate:fm-labd1dd71aa86e4-adv worktree=/private/tmp/fmlab.WHZDyD/treehouse/.treehouse/notes-d039db/2/notes
+advisor= lines in meta: 0
+--model claude-haiku-5-5 --effort low : Firstmate 
