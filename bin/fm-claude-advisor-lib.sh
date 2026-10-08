@@ -24,7 +24,10 @@
 # 5.5 can never act as an advisor. When either side is an alias whose version
 # matters, a model the table does not cover, or the main model is left to
 # Claude Code's default, the pairing is undeterminable here and is left to
-# Claude Code, which exits at launch on an advisor it cannot use.
+# Claude Code, which exits at launch only on an advisor that can never advise
+# or another launch error such as an allowlist or Fable consent, while an
+# advisor ranked below the main model only warns in the worker's own pane and
+# runs without it.
 #
 # Prepend FM_CLAUDE_ADVISOR_JQ to a consumer's jq program:
 #   claude_advisor_problem($harness; $model; $advisor)
