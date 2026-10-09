@@ -1,0 +1,4 @@
+ok - real treehouse v3.1.2: a new slot reads acquired only after its checkout, and not after release
+ok - real treehouse v3.1.2: a reused slot reads acquired only once treehouse hands it over, and not after release
+# all fm-spawn-treehouse-readiness-e2e tests passed
+bash tests/fm-spawn-treehouse-readiness-e2e.test.sh  0.71s user 1.63s system 26% cpu 8.914 total
