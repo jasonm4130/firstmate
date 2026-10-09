@@ -1,0 +1,25 @@
+== 1. relaunch with no --advisor keeps the recorded advisor
+relaunched lab0610674e8571-worker harness=claude from=claude model=claude-haiku-5-5 effort=low advisor=opus backend=tmux endpoint=firstmate:fm-lab0610674e8571-worker worktree=/private/tmp/fmlab-adv67563/treehouse/.treehouse/notes-82bc2f/1/notes
+rc=0
+model=claude-haiku-5-5
+advisor=opus
+process: --model claude-haiku-5-5 --effort low --advisor opus
+
+== 2. ADVERSARIAL: relaunch onto claude-opus-5-5 with a sonnet advisor (below rank) must refuse before the agent stops
+pid before: 67486
+error: lifecycle control (fm-control) refused - task 'lab0610674e8571-worker' is leased to the branch supervision actor (state/.lease-lab0610674e8571-worker), which is handling that task right now; leave the lease alone (never remove or clear it) and retry after that actor releases it, which it does when its handling ends
+rc=6
+pid after: 67486
+model=claude-haiku-5-5
+advisor=opus
+
+== 3. ADVERSARIAL: relaunch onto claude-opus-5-5 keeping inherited opus advisor? (opus alias, unknown version)
+(skipped: would replace worker; covered by unit test)
+
+== 4. relaunch --advisor default clears it
+error: lifecycle control (fm-control) refused - task 'lab0610674e8571-worker' is leased to the branch supervision actor (state/.lease-lab0610674e8571-worker), which is handling that task right now; leave the lease alone (never remove or clear it) and retry after that actor releases it, which it does when its handling ends
+rc=6
+model=claude-haiku-5-5
+advisor=opus
+1
+process: --model claude-haiku-5-5 --effort low --advisor opus

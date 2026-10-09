@@ -1,0 +1,14 @@
+== 2. ADVERSARIAL: relaunch onto claude-opus-5-5 with a sonnet advisor (below rank) must refuse before the agent stops
+pid before: 67486
+error: relaunching lab0610674e8571-worker: advisor sonnet ranks below main model claude-opus-5-5 in Claude Code's advisor pairing table, so the worker would run without it; pass --advisor default to relaunch without one, or name another
+rc=1
+pid after: 67486
+model=claude-haiku-5-5
+advisor=opus
+
+== 4. relaunch --advisor default clears it
+relaunched lab0610674e8571-worker harness=claude from=claude model=claude-haiku-5-5 effort=low advisor=default backend=tmux endpoint=firstmate:fm-lab0610674e8571-worker worktree=/private/tmp/fmlab-adv67563/treehouse/.treehouse/notes-82bc2f/1/notes
+rc=0
+model=claude-haiku-5-5
+advisor lines in meta: 0
+process: --model claude-haiku-5-5 --effort low

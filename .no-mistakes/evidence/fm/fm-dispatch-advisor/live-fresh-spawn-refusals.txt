@@ -1,0 +1,40 @@
+== ADVERSARIAL fresh spawns that must refuse before provisioning
+$ fm-spawn.sh lab0610674e8571-bad <notes> --scout --harness claude --model claude-opus-5-5 --advisor sonnet
+error: --advisor: advisor sonnet ranks below main model claude-opus-5-5 in Claude Code's advisor pairing table, so the worker would run without it
+rc=1
+$ fm-spawn.sh lab0610674e8571-bad <notes> --scout --harness claude --model claude-haiku-5-5 --advisor claude-haiku-4-5
+WARNING: queued wakes pending - drain them with bin/fm-wake-drain.sh before anything else.
+error: --advisor: advisor claude-haiku-4-5 cannot act as an advisor (Haiku before 5.5)
+rc=1
+$ fm-spawn.sh lab0610674e8571-bad <notes> --scout --harness codex --advisor opus
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  WATCHER DOWN - SUPERVISION IS OFF
+●  2 task(s) in flight, but no live watcher process holds this home lock (last beat: 35s ago).
+●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair.
+●  This is a supervision warning only; the guarded operation WILL still run.
+●  After draining queued wakes, repair missing watcher supervision according to the session-start block for this harness; do not use shell &.
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+WARNING: queued wakes pending - drain them with bin/fm-wake-drain.sh before anything else.
+error: --advisor applies only to the canonical claude harness launch, not 'codex'
+rc=1
+$ fm-spawn.sh lab0610674e8571-bad <notes> --scout --harness claude --advisor haiku
+WARNING: watcher still down (same stale episode; last beat: 36s ago, grace 300s) - full banner already printed this episode.
+WARNING: queued wakes pending - drain them with bin/fm-wake-drain.sh before anything else.
+error: --advisor: advisor haiku must be fable, opus, sonnet, or a full claude-* model id
+rc=1
+$ fm-spawn.sh lab0610674e8571-bad <notes> --scout --harness claude --advisor default
+WARNING: queued wakes pending - drain them with bin/fm-wake-drain.sh before anything else.
+error: --advisor default only clears a recorded advisor on --relaunch; omit --advisor for a fresh spawn without one
+rc=1
+state/lab0610674e8571-bad.meta exists? no
+tmux windows:
+lab
+fm-lab0610674e8571-worker
+main
+fm-lab0610674e8571-scout
+treehouse slots:
+1
+2
+treehouse-state.json
+treehouse-state.key
+treehouse-state.lock

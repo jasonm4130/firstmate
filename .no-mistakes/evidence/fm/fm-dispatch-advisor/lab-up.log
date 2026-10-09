@@ -1,13 +1,13 @@
-lab: /private/tmp/fmlab.WHZDyD (tear down with: bin/fm-live-lab.sh down /private/tmp/fmlab.WHZDyD)
-tree: c624f034225f779a49f823411c1c896ace2355c1 from /Users/jasonmatthew/.no-mistakes/worktrees/1bc2b7ffb15a/01M4DJACQEEKTSN01YJ0ZA5054
-spawned labd1dd71aa86e4-worker harness=claude kind=ship mode=local-only yolo=on window=firstmate:fm-labd1dd71aa86e4-worker worktree=/private/tmp/fmlab.WHZDyD/treehouse/.treehouse/notes-d039db/1/notes
-gate: /private/tmp/fmlab.WHZDyD/home/data/labd1dd71aa86e4-worker/gate (touch, then message the worker to resume)
+lab: /private/tmp/fmlab-adv67563 (tear down with: bin/fm-live-lab.sh down /private/tmp/fmlab-adv67563)
+tree: 0e0e875f9f9246a58ad3056761d4a7c5e1c9979e from /Users/jasonmatthew/.no-mistakes/worktrees/1bc2b7ffb15a/01M4HCPCJCM0TK9DWZXM0SZ8XG
+spawned lab0610674e8571-worker harness=claude kind=ship mode=local-only yolo=on window=firstmate:fm-lab0610674e8571-worker worktree=/private/tmp/fmlab-adv67563/treehouse/.treehouse/notes-82bc2f/1/notes
+gate: /private/tmp/fmlab-adv67563/home/data/lab0610674e8571-worker/gate (touch, then message the worker to resume)
 primary: claude --setting-sources project,local --model sonnet --effort medium --permission-mode auto
-ok primary: claude pid 42282 in /private/tmp/fmlab.WHZDyD/home
-ok probe: the primary answered LABREADY-d1dd71aa86e4
-ok trust: /private/tmp/fmlab.WHZDyD/home is trusted in the Claude store
-fail host: supervision host pid 53925 runs (expected none)
+ok primary: claude pid 83558 in /private/tmp/fmlab-adv67563/home
+ok probe: the primary answered LABREADY-0610674e8571
+ok trust: /private/tmp/fmlab-adv67563/home is trusted in the Claude store
+fail host: supervision host pid 95512 runs (expected none)
 ok watcher: live watcher with a fresh beacon
-ok worker: labd1dd71aa86e4-worker parked on /private/tmp/fmlab.WHZDyD/home/data/labd1dd71aa86e4-worker/gate
+fail worker: the worker is not currently parked on /private/tmp/fmlab-adv67563/home/data/lab0610674e8571-worker/gate (state: working · source: pane · harness busy (claude-hook))
 ok treehouse: ~/.treehouse unchanged
-not ready after 600s; the lab is left up for inspection: bin/fm-live-lab.sh pane /private/tmp/fmlab.WHZDyD, then bin/fm-live-lab.sh down /private/tmp/fmlab.WHZDyD
+not ready after 600s; the lab is left up for inspection: bin/fm-live-lab.sh pane /private/tmp/fmlab-adv67563, then bin/fm-live-lab.sh down /private/tmp/fmlab-adv67563

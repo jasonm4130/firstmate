@@ -1,0 +1,15 @@
+== ADVERSARIAL: explicit --advisor opus on a switch to codex must refuse before stop
+error: relaunching lab0610674e8571-scout: advisor applies only to the claude harness, not codex; pass --advisor default to relaunch without one, or name another
+rc=1
+harness=claude
+model=claude-haiku-5-5
+advisor=opus
+
+== switch to codex with no --advisor drops the recorded advisor
+relaunched lab0610674e8571-scout harness=codex from=claude model=gpt-5.5 effort=default advisor=default backend=tmux endpoint=firstmate:fm-lab0610674e8571-scout worktree=/private/tmp/fmlab-adv67563/treehouse/.treehouse/notes-82bc2f/2/notes
+rc=0
+harness=codex
+model=gpt-5.5
+advisor lines in meta: 0
+process: 
+advisor anywhere in codex argv? 0

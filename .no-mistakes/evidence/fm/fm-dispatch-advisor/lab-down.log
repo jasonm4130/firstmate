@@ -1,5 +1,6 @@
-removed: task temp /tmp/fm-labd1dd71aa86e4-worker+c95216bd46cda06ccc6f9c4cb90ac52cf45390bc34a2f38022f2a972aa9acb56
-removed: task temp /tmp/fm-labd1dd71aa86e4-worker
-removed: task temp /tmp/fm-labd1dd71aa86e4-adv+c95216bd46cda06ccc6f9c4cb90ac52cf45390bc34a2f38022f2a972aa9acb56
-removed: 4 Claude project entries under /private/tmp/fmlab.WHZDyD
-removed: /private/tmp/fmlab.WHZDyD
+stopped: lab tmux server and lab processes
+removed: task temp /tmp/fm-lab0610674e8571-worker+c2c7cc5161d3dfd1cc821da671bf70286f40ff055b6e4d776d695ee23a84c6b0
+removed: task temp /tmp/fm-lab0610674e8571-worker
+removed: task temp /tmp/fm-lab0610674e8571-scout+c2c7cc5161d3dfd1cc821da671bf70286f40ff055b6e4d776d695ee23a84c6b0
+removed: 4 Claude project entries under /private/tmp/fmlab-adv67563
+removed: /private/tmp/fmlab-adv67563

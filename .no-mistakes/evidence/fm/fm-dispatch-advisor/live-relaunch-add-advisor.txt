@@ -1,0 +1,21 @@
+$ fm-control.sh lab0610674e8571-worker relaunch --model claude-haiku-5-5 --advisor opus --note ...
+relaunched lab0610674e8571-worker harness=claude from=claude model=claude-haiku-5-5 effort=low advisor=opus backend=tmux endpoint=firstmate:fm-lab0610674e8571-worker worktree=/private/tmp/fmlab-adv67563/treehouse/.treehouse/notes-82bc2f/1/notes
+rc=0
+
+$ cat state/lab0610674e8571-worker.meta
+window=firstmate:fm-lab0610674e8571-worker
+endpoint_task_id=lab0610674e8571-worker
+worktree=/private/tmp/fmlab-adv67563/treehouse/.treehouse/notes-82bc2f/1/notes
+project=/private/tmp/fmlab-adv67563/home/projects/notes
+harness=claude
+kind=ship
+mode=local-only
+yolo=on
+branch=fm/lab0610674e8571-worker
+tasktmp=/tmp/fm-lab0610674e8571-worker
+model=claude-haiku-5-5
+effort=low
+advisor=opus
+busy_gen=g1791586479.35044.12789
+spawn_gen=s1791586480.33376.20128
+control_relaunch_tx=29207.20261009T225435Z.19461

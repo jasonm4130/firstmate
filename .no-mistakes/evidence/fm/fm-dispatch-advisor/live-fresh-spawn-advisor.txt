@@ -1,0 +1,29 @@
+== fresh scout spawn: --harness claude --model claude-haiku-5-5 --effort low --advisor opus
+NOTICE: wake rows held by the live supervision branch - it presents and acknowledges them; do not drain them from here.
+spawned lab0610674e8571-scout harness=claude kind=scout window=firstmate:fm-lab0610674e8571-scout worktree=/private/tmp/fmlab-adv67563/treehouse/.treehouse/notes-82bc2f/2/notes
+rc=0
+harness=claude
+kind=scout
+model=claude-haiku-5-5
+effort=low
+advisor=opus
+process: --model claude-haiku-5-5 --effort low --advisor opus
+pane footer:
+ ▐▛███▛█   Claude Code v2.1.296
+▝▜██████▀  Haiku 5.5 with low effort · Claude Max
+                                                                                                                                                      Advisor Tool (experimental) is on and may use more tokens · /advisor
+
+== ADVERSARIAL fresh spawns that must refuse before provisioning
+$ fm-spawn.sh lab0610674e8571-bad notes --scout --harness claude --model claude-opus-5-5 --advisor sonnet
+usage: basename string [suffix]
+       basename [-a] [-s suffix] string [...]
+$ fm-spawn.sh lab0610674e8571-bad notes --scout --harness claude --model claude-haiku-5-5 --advisor claude-haiku-4-5
+usage: basename string [suffix]
+       basename [-a] [-s suffix] string [...]
+$ fm-spawn.sh lab0610674e8571-bad notes --scout --harness codex --advisor opus
+usage: basename string [suffix]
+       basename [-a] [-s suffix] string [...]
+$ fm-spawn.sh lab0610674e8571-bad notes --scout --harness claude --advisor haiku
+usage: basename string [suffix]
+       basename [-a] [-s suffix] string [...]
+meta for refused id exists? no
