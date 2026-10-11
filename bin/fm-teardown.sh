@@ -297,6 +297,13 @@
 #     root still exists, so the account's healthy LaunchAgent worker and every
 #     live remote secondmate worker are out of scope. Best effort: a sweep
 #     failure never blocks this teardown.
+#   Fix 4 - reap orphaned no-mistakes run processes. A test step's worker pool
+#     (vitest's, observed) can outlive the step at parent 1 inside the run's
+#     own copy under the no-mistakes home, a root Fix 2's task-root scan never
+#     covers. bin/fm-nm-reap-run-orphans.sh owns that sweep and its safety rule;
+#     teardown runs the same sweep the watcher runs on its own cadence. It is
+#     not task-attributed, so it runs whether or not the endpoint close was
+#     confirmed. Best effort: a sweep failure never blocks this teardown.
 # After Fix 1 and Fix 2, when config/pipeline-spend opts this home in, a ship
 # task whose local copy this teardown owns has its no-mistakes pipeline spend
 # recorded by bin/fm-pipeline-spend.sh, which owns the attribution and the
@@ -3676,6 +3683,10 @@ fi
 # Fix 3 (see script header): sweep remote job workers abandoned by an already
 # pruned code root. Best effort - a sweep failure never blocks this teardown.
 "$SCRIPT_DIR/fm-remote-job-reap-orphans.sh" >&2 || true
+
+# Fix 4 (see script header): reap processes no-mistakes runs left orphaned in
+# their run copies. Best effort - never blocks this teardown.
+"$SCRIPT_DIR/fm-nm-reap-run-orphans.sh" >&2 || true
 
 # Best-effort: drop the local task branch so the shared repo does not accumulate refs.
 if [ "$BACKEND" = orca ] && [ "$KIND" != secondmate ]; then
