@@ -1,0 +1,97 @@
+# DRAFT for review - intended path: .github/workflows/sync-upstream.yml on branch fm/fm-codex-worker-home.
+# Not committed: the worker's auto-mode classifier refused writing it into the repo ("Unauthorized Persistence").
+name: Sync upstream
+
+# Keeps the jasonm4130/firstmate fork's main current with kunchenguid/firstmate
+# main. Upstream lands as a merge commit on top of the fork's main, never a
+# rebase or force-push, so every local copy keeps fast-forwarding from the
+# fork. A clean merge is pushed; a conflicting one pushes nothing and opens or
+# updates a single issue in the fork for a person to resolve by hand.
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository == 'jasonm4130/firstmate'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      UPSTREAM_URL: https://github.com/kunchenguid/firstmate.git
+      UPSTREAM_BRANCH: main
+      ISSUE_TITLE: "Upstream sync conflict: kunchenguid/firstmate main"
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Merge upstream main
+        id: merge
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch --no-tags "$UPSTREAM_URL" "$UPSTREAM_BRANCH"
+          upstream=$(git rev-parse FETCH_HEAD)
+          echo "upstream=$upstream" >> "$GITHUB_OUTPUT"
+          if git merge-base --is-ancestor "$upstream" HEAD; then
+            echo "result=current" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if git merge --no-ff --no-edit -m "Merge kunchenguid/firstmate main (${upstream:0:12})" "$upstream"; then
+            echo "result=merged" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git diff --name-only --diff-filter=U > "$RUNNER_TEMP/conflicts.txt"
+          git merge --abort
+          echo "result=conflict" >> "$GITHUB_OUTPUT"
+
+      - name: Push the merge
+        if: steps.merge.outputs.result == 'merged'
+        run: git push origin HEAD:main
+
+      - name: Open or update the conflict issue
+        if: steps.merge.outputs.result == 'conflict'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_SHA: ${{ steps.merge.outputs.upstream }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          fork_sha=$(git rev-parse HEAD)
+          {
+            echo "The scheduled merge of kunchenguid/firstmate \`$UPSTREAM_BRANCH\` into this fork's \`main\` conflicts, so nothing was pushed."
+            echo
+            echo "- Upstream: \`$UPSTREAM_SHA\`"
+            echo "- Fork main: \`$fork_sha\`"
+            echo "- Run: $RUN_URL"
+            echo
+            echo "Conflicting files:"
+            echo
+            while IFS= read -r file; do echo "- \`$file\`"; done < "$RUNNER_TEMP/conflicts.txt"
+            echo
+            echo "Resolve locally with a merge commit, never a rebase or force-push:"
+            echo
+            echo '```sh'
+            echo "git fetch $UPSTREAM_URL $UPSTREAM_BRANCH"
+            echo "git merge --no-ff FETCH_HEAD"
+            echo '```'
+          } > "$RUNNER_TEMP/issue.md"
+          number=$(gh issue list --state open --search "in:title \"$ISSUE_TITLE\"" --json number,title \
+            --jq "map(select(.title == \"$ISSUE_TITLE\")) | first | .number // empty")
+          if [ -n "$number" ]; then
+            gh issue edit "$number" --body-file "$RUNNER_TEMP/issue.md"
+            gh issue comment "$number" --body "Still conflicting at upstream \`$UPSTREAM_SHA\`: $RUN_URL"
+          else
+            gh issue create --title "$ISSUE_TITLE" --body-file "$RUNNER_TEMP/issue.md"
+          fi
