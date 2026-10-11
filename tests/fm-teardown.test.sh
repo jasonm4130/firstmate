@@ -4769,23 +4769,30 @@ test_task_resources_stop_only_after_exit_and_return() {
 }
 
 test_task_chrome_stop_requires_entire_task_group() {
-  local case_dir rc unsafe
-  for unsafe in 0 1; do
-    case_dir=$(make_case "chrome-stop-$unsafe")
-    write_meta "$case_dir" local-only ship
-    add_task_resource_fakes "$case_dir"
-    printf '{"pid":90000001,"port":9224}\n' > "$case_dir/chrome-state/bridge.pid"
-    rc=0
-    FM_RESOURCE_UNSAFE_GROUP="$unsafe" run_resource_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
-    expect_code 0 "$rc" "chrome resource teardown should succeed"
-    if [ "$unsafe" = 0 ]; then
-      assert_grep "chrome stop default $case_dir/data/task-x1" "$case_dir/resources.log" "safe bridge did not use chrome stop from task directory"
-      assert_no_grep 'signal' "$case_dir/resources.log" "already stopped Chrome received signals"
-    else
-      assert_no_grep 'chrome stop' "$case_dir/resources.log" "chrome stop targeted an outside group member"
-      assert_grep 'signal -TERM 90000001' "$case_dir/resources.log" "unsafe group did not use an individual bridge signal"
-      assert_grep 'left chrome stop for bridge' "$case_dir/stderr" "unsafe global stop was not reported"
-    fi
+  local case_dir rc unsafe session
+  for session in default 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123; do
+    for unsafe in 0 1; do
+      case_dir=$(make_case "chrome-stop-$session-$unsafe")
+      write_meta "$case_dir" local-only ship
+      add_task_resource_fakes "$case_dir"
+      if [ "$session" = default ]; then
+        printf '{"pid":90000001,"port":9224}\n' > "$case_dir/chrome-state/bridge.pid"
+      else
+        mkdir -p "$case_dir/chrome-state/sessions/$session"
+        printf '{"pid":90000001,"port":9224}\n' > "$case_dir/chrome-state/sessions/$session/bridge.pid"
+      fi
+      rc=0
+      FM_RESOURCE_UNSAFE_GROUP="$unsafe" run_resource_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+      expect_code 0 "$rc" "chrome resource teardown should succeed"
+      if [ "$unsafe" = 0 ]; then
+        assert_grep "chrome stop $session $case_dir/data/task-x1" "$case_dir/resources.log" "safe bridge did not use chrome stop from task directory"
+        assert_no_grep 'signal' "$case_dir/resources.log" "already stopped Chrome received signals"
+      else
+        assert_no_grep 'chrome stop' "$case_dir/resources.log" "chrome stop targeted an outside group member"
+        assert_grep 'signal -TERM 90000001' "$case_dir/resources.log" "unsafe group did not use an individual bridge signal"
+        assert_grep 'left chrome stop for bridge' "$case_dir/stderr" "unsafe global stop was not reported"
+      fi
+    done
   done
   pass "Chrome stop requires a matched session PID, task descendants and an entirely task-owned group"
 }

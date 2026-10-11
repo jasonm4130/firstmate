@@ -291,7 +291,7 @@ SH
 }
 
 test_relaunch_rebuilds_the_switch() {
-  local setting dir home proj wt id out status seen launch preamble
+  local setting dir home proj wt id out status seen launch preamble browser_session
   for setting in absent enabled; do
     id="relaunch-$setting-a1"
     dir="$TMP_ROOT/relaunch-$setting"
@@ -344,6 +344,25 @@ $launch") \
       || fail "relaunch with allowlist=$setting: the replacement launch failed to run"
     assert_equals 1 "$seen" \
       "a relaunched agent with allowlist=$setting must start with the compact adviser disabled, exactly as a fresh spawn does"
+    browser_session=$(grep '^export CHROME_DEVTOOLS_AXI_SESSION=' "$dir/fake/keys" | tail -1)
+    [ -n "$browser_session" ] || fail "relaunch did not export a browser session"
+    install_env_probe "$dir/fakebin" codex CHROME_DEVTOOLS_AXI_SESSION
+    seen=$(env -i HOME="$dir/user-home" PATH="$dir/fakebin:$PATH" TERM=xterm \
+      TMUX=synthetic-pane CHROME_DEVTOOLS_AXI_SESSION=shared-default \
+      /bin/sh -c "$preamble
+$launch") || fail "relaunched browser session probe failed"
+    assert_equals "${browser_session#export CHROME_DEVTOOLS_AXI_SESSION=}" "$seen" \
+      "replacement agent must inherit its task-specific browser session"
+    # A second lifecycle relaunch must not abandon the existing task session.
+    : > "$dir/fake/keys"
+    out=$(env PATH="$dir/fakebin:$PATH" FM_HOME="$home" FM_FAKE_DIR="$dir/fake" \
+      HOME="$dir/user-home" CLAUDE_CONFIG_DIR='' FM_SPAWN_NO_GUARD=1 \
+      FM_CONTROL_POLL=0.01 FM_CONTROL_EXIT_WAIT=0.05 FM_CONTROL_LAUNCH_WAIT=0.05 \
+      "$CONTROL" "$id" relaunch --note 'continue the same browser session' 2>&1)
+    status=$?
+    expect_code 0 "$status" "second relaunch should succeed: $out"
+    assert_equals "$browser_session" "$(grep '^export CHROME_DEVTOOLS_AXI_SESSION=' "$dir/fake/keys" | tail -1)" \
+      "relaunch must retain the same browser session identity"
   done
   pass "relaunch rebuilds the compact-adviser switch for the replacement agent in both allowlist postures"
 }
@@ -381,6 +400,48 @@ SH
     "a raw compound launch must start its agent with the compact adviser disabled, even after cd"
   pass "a compound raw launch-command still starts its agent with the compact-adviser switch on"
 }
+
+# The browser bridge is user-wide by session name, so launch identity must
+# separate homes as well as task ids, and survive an environment allowlist.
+test_task_browser_session_isolation() {
+  local setting rec id out status first other
+  for setting in absent enabled; do
+    id=browser-task
+    rec=$(make_case "browser-$setting" codex "$id" browser-other)
+    read_case "$rec"
+    [ "$setting" = absent ] || : > "$HOME_DIR/config/launch-env-allowlist"
+    out=$(run_case_spawn "$id" "$PROJ_DIR" --mode local-only --yolo off)
+    status=$?
+    expect_code 0 "$status" "browser session spawn should succeed: $out"
+    install_env_probe "$FAKEBIN_DIR" codex CHROME_DEVTOOLS_AXI_SESSION
+    first=$(emitted_launch_env "$FAKEBIN_DIR" "$LAUNCH_LOG" "$PANE_LOG") \
+      || fail "could not execute browser session launch"
+    [ "${#first}" -le 64 ] && [ "$first" != default ] && [ "$first" != unset ] && [ -n "$first" ] \
+      || fail "browser session must have a valid non-default name: $first"
+    case "$first" in *[!A-Za-z0-9._-]*) fail "browser session contains unsafe characters" ;; esac
+    # A second task in the same home must override the inherited/default bridge.
+    out=$(run_case_spawn browser-other "$PROJ_DIR" --scout)
+    status=$?
+    expect_code 0 "$status" "browser scout spawn should succeed: $out"
+    other=$(emitted_launch_env "$FAKEBIN_DIR" "$LAUNCH_LOG" "$PANE_LOG")
+    [ "$other" != "$first" ] && [ "$other" != unset ] \
+      || fail "different tasks shared a browser session"
+    # Equal ids in different homes must also get different bridge identities.
+    rec=$(make_case "browser-other-home-$setting" codex "$id")
+    read_case "$rec"
+    [ "$setting" = absent ] || : > "$HOME_DIR/config/launch-env-allowlist"
+    out=$(run_case_spawn "$id" "$PROJ_DIR" --mode local-only --yolo off)
+    status=$?
+    expect_code 0 "$status" "other-home browser spawn should succeed: $out"
+    install_env_probe "$FAKEBIN_DIR" codex CHROME_DEVTOOLS_AXI_SESSION
+    other=$(emitted_launch_env "$FAKEBIN_DIR" "$LAUNCH_LOG" "$PANE_LOG")
+    [ "$other" != "$first" ] && [ "$other" != unset ] \
+      || fail "equal task ids in different homes shared a browser session"
+  done
+  pass "browser sessions separate tasks and homes and survive allowlisting"
+}
+
+test_task_browser_session_isolation
 
 test_ship_allowlist_absent
 test_ship_allowlist_enabled
