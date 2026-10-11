@@ -1,5 +1,3 @@
-# DRAFT for review - intended path: .github/workflows/sync-upstream.yml on branch fm/fm-codex-worker-home.
-# Not committed: the worker's auto-mode classifier refused writing it into the repo ("Unauthorized Persistence").
 name: Sync upstream
 
 # Keeps the jasonm4130/firstmate fork's main current with kunchenguid/firstmate
