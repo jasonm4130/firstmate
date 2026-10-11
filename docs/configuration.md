@@ -11,6 +11,7 @@ Start with the directory layout, then use the setting reference for the behavior
 | Task windows and worker tools | [Runtime backend](#runtime-backend-configbackend--fm_backend) and [harness support](#harness-support) |
 | Worker permissions, accounts, or environment | [Claude permission mode](#claude-permission-mode-configclaude-permission-mode), [worker account pin](#worker-account-pin-configclaude-account-configcodex-account-configpi-account), [worker tool exclusions](#worker-tool-exclusions-configcrew-exclude-tools), and [worker launch environment](#worker-launch-environment-configlaunch-env-allowlist) |
 | Backlog, preferences, and memory | [Backlog backend](#backlog-backend-taskstoml--configbacklog-backend), [captain preferences](#captain-preferences-datacaptainmd--datacaptain-sharedmd), and [startup memory budget](#startup-memory-budget-configstartup-memory-budget) |
+| Runaway quota spend | [Quota burn-rate alert](#quota-burn-rate-alert-configquota-burn-percent-per-hour) |
 | Supervision and presentation | [Pi supervision branch](#pi-supervision-branch), [supervision host](#supervision-host-configsupervision-host), and [Calm preference](#calm-preference-configcalm) |
 | Persistent secondmates | [Secondmate routes](#secondmate-routes-datasecondmatesmd) |
 | Per-run overrides and tuning | [Environment variables](#environment-variables) |
@@ -615,6 +616,28 @@ With the flag absent the wedge timer spends no fold or current-state read for it
 The flag is a home-local supervision-noise preference and is not inherited by secondmate homes, which supervise their own crew and own that trade separately.
 
 [`architecture.md`](architecture.md) owns the wait-evidence contract and which records may take the ladder away; `bin/fm-watch.sh`'s `wedge_wait_evidence` owns the exact derivation and its fail-closed boundaries.
+
+## Quota burn-rate alert (config/quota-burn-percent-per-hour)
+
+The quota watch (`bin/fm-procevent-quota.sh`) also wakes when spend is running away, so one stuck worker cannot drain the single plan before anyone looks.
+The optional local, gitignored `config/quota-burn-percent-per-hour` file holds the limit as one number: the percent of a single quota window that may be consumed over the last hour.
+With the file absent or malformed the limit is `50`, and a value of `off` or `0` disables the alert; the file is read on every poll, so a change applies without re-arming the watch.
+
+### What counts as burn
+
+The alert uses the same `quota-axi --json` snapshot as the existing low and exhausted conditions and adds no data source.
+Each successful read records every known scope's `effectivePercentRemaining` in `state/quota-burn/<source-id>.tsv`, pruned to the last hour; nothing is written while the alert is off.
+The percent consumed is the sum of the positive drops between consecutive samples of one provider, account, and scope, so a window reset never counts as spend, and the largest per-scope total is compared with the limit.
+A low or exhausted reading keeps its own outcome and takes precedence over burn.
+
+### One wake per episode
+
+The poll ends with a `burn` outcome carrying the consumed percent, the limit, the window, and the scope key, and the generic runner wakes firstmate and retires the source as it does for the other outcomes.
+An episode marker next to the history keeps a re-armed watch silent while the hour is still over the limit, and it clears on the first later read at or under the limit.
+The alert only wakes firstmate; it never approves, answers, pauses, or stops a worker.
+The history lives under `state/quota-burn/` rather than the source registry, and `fm-procevent-quota.sh retire` removes it.
+
+Spend by a worker that edits its own hooks or transcripts is still visible here because the figure comes from the provider's quota, not from per-call counting.
 
 ## Gate defaults (.no-mistakes.yaml)
 
