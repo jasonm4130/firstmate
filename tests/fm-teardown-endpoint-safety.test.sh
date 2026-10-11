@@ -31,6 +31,9 @@ printf ' <%s>' "$@" >> "${FM_RUNTIME_LOG:?}"
 printf '\n' >> "${FM_RUNTIME_LOG:?}"
 exit 0
 SH
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$TMP_ROOT/$dir/fakebin/docker"
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$TMP_ROOT/$dir/fakebin/chrome-devtools-axi"
+  chmod +x "$TMP_ROOT/$dir/fakebin/docker" "$TMP_ROOT/$dir/fakebin/chrome-devtools-axi"
   chmod +x "$TMP_ROOT/$dir/fakebin/tmux" "$TMP_ROOT/$dir/fakebin/treehouse"
   printf '%s\n' "$TMP_ROOT/$dir"
 }

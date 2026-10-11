@@ -54,6 +54,9 @@ fi
 [ -f "$RESP/$n.out" ] && cat "$RESP/$n.out"
 exit 0
 SH
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$fb/docker"
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$fb/chrome-devtools-axi"
+  chmod +x "$fb/docker" "$fb/chrome-devtools-axi"
   chmod +x "$fb/orca"
   printf '%s\n' "$fb"
 }
@@ -869,6 +872,8 @@ test_scout_teardown_removes_orca_worktree_via_helper() {
   rc=$?
   set -e
   expect_code 0 "$rc" "Orca scout teardown should succeed once report exists"$'\n'"$out"
+  assert_contains "$out" "left Docker containers: task agent exit is not confirmed" \
+    "Orca best-effort terminal close must not authorize task resource stops"
   assert_contains "$(cat "$LOG")" $'orca\x1f''terminal'$'\x1f''close'$'\x1f''--terminal'$'\x1f''term-teardown'$'\x1f''--json' \
     "teardown did not close the recorded Orca terminal"
   assert_contains "$(cat "$LOG")" $'orca\x1f''worktree'$'\x1f''rm'$'\x1f''--worktree'$'\x1f''id:wt-teardown::/orca/wt-teardown'$'\x1f''--force'$'\x1f''--json' \

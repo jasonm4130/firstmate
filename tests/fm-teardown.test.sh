@@ -170,6 +170,11 @@ case "${1:-}" in
 esac
 exit 0
 SH
+  # Never call the host's resource tools while exercising fixture teardowns.
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$fakebin/docker"
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$fakebin/chrome-devtools-axi"
+  chmod +x "$fakebin/docker" "$fakebin/chrome-devtools-axi"
+
   chmod +x "$fakebin/treehouse" "$fakebin/tmux" "$fakebin/gh-axi" "$fakebin/gh" "$fakebin/no-mistakes"
 
   # Bare origin so the clone has an `origin` remote and origin/HEAD.
@@ -633,6 +638,7 @@ run_teardown() {
   FM_STATE_OVERRIDE="$case_dir/state" \
   FM_DATA_OVERRIDE="$case_dir/data" \
   FM_CONFIG_OVERRIDE="$case_dir/config" \
+  FM_TEST_CHROME_STATE_DIR="${FM_TEST_CHROME_STATE_DIR:-$case_dir/no-chrome-state}" \
   PATH="$case_dir/fakebin:${FM_TEARDOWN_TEST_PATH:-$PATH}" \
     "$TEARDOWN" task-x1 "$@"
 }
@@ -4108,11 +4114,11 @@ test_leaked_tasktmp_process_is_reaped() {
   local case_dir rc pid
   case_dir=$(make_case leaked-tasktmp-reap)
   write_meta "$case_dir" no-mistakes ship
-  printf '%s\n' "tasktmp=$case_dir/tasktmp" >> "$case_dir/state/task-x1.meta"
-  mkdir -p "$case_dir/tasktmp"
+  printf '%s\n' "tasktmp=$case_dir/data/task-x1/tasktmp" >> "$case_dir/state/task-x1.meta"
+  mkdir -p "$case_dir/data/task-x1/tasktmp"
   land_shippable_commit "$case_dir"
 
-  ( cd "$case_dir/tasktmp" && exec sleep 300 ) &
+  ( cd "$case_dir/data/task-x1/tasktmp" && exec sleep 300 ) &
   pid=$!
   disown
   sleep 0.3
@@ -4131,41 +4137,21 @@ test_leaked_tasktmp_process_is_reaped() {
   pass "a leaked descendant process rooted under the task's per-task tasktmp is reaped by teardown too"
 }
 
-test_lsof_absent_reaps_tmux_process_group() {
-  local case_dir rc pid path_without_lsof
-  case_dir=$(make_case lsof-absent-process-group-reap)
+test_lsof_absent_refuses_unattributed_signals() {
+  local case_dir rc path_without_lsof
+  case_dir=$(make_case lsof-absent-refusal)
   write_meta "$case_dir" no-mistakes ship
   land_shippable_commit "$case_dir"
   path_without_lsof=$(make_path_without_lsof "$case_dir")
   PATH="$path_without_lsof" command -v lsof >/dev/null 2>&1 \
-    && fail "lsof-absent-process-group-reap: fixture path unexpectedly exposes lsof"
-
-  perl -e 'setpgrp(0, 0); chdir shift or die; exec "sleep", "300"' "$case_dir/wt" &
-  pid=$!
-  disown
-  sleep 0.3
-  kill -0 "$pid" 2>/dev/null || fail "lsof-absent-process-group-reap: setup sleeper did not start"
-  cat > "$case_dir/fakebin/tmux" <<EOF
-#!/usr/bin/env bash
-if [ "\${1:-}" = display-message ] && [ "\${*: -1}" = '#{pane_pid}' ]; then
-  printf '%s\n' '$pid'
-fi
-exit 0
-EOF
-  chmod +x "$case_dir/fakebin/tmux"
-
+    && fail "lsof-absent: fixture path unexpectedly exposes lsof"
   rc=0
   FM_TEARDOWN_TEST_PATH="$path_without_lsof" \
     run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
-
-  expect_code 0 "$rc" "lsof-absent-process-group-reap: teardown should succeed"
-  if kill -0 "$pid" 2>/dev/null; then
-    kill -KILL "$pid" 2>/dev/null || true
-    fail "lsof-absent-process-group-reap: tmux process group survived teardown"
-  fi
-  assert_grep "reaping leaked worktree process group" "$case_dir/stderr" \
-    "lsof-absent-process-group-reap: teardown did not use the process-group fallback"
-  pass "missing lsof falls back to reaping the tmux pane process group"
+  expect_code 1 "$rc" "missing lsof must refuse unattributed process signals"
+  assert_grep "lsof unavailable" "$case_dir/stderr" "missing lsof was not reported"
+  assert_present "$case_dir/state/task-x1.meta" "missing lsof removed task identity"
+  pass "missing lsof refuses instead of signaling a group with unproven cwd attribution"
 }
 
 test_lsof_error_refuses_before_removal() {
@@ -4211,7 +4197,7 @@ count=0
 [ ! -f '$case_dir/lsof-count' ] || count=\$(cat '$case_dir/lsof-count')
 count=\$((count + 1))
 printf '%s\n' "\$count" > '$case_dir/lsof-count'
-if [ "\$count" -le 3 ]; then printf 'p%s\nfcwd\nn%s\n' '$pid' '$case_dir/wt'; fi
+if [ "\$count" -le 4 ]; then printf 'p%s\nfcwd\nn%s\n' '$pid' '$case_dir/wt'; fi
 EOF
   cat > "$case_dir/fakebin/ps" <<'SH'
 #!/usr/bin/env bash
@@ -4277,7 +4263,7 @@ count=0
 [ ! -f "$FM_FAKE_LSOF_COUNT" ] || count=$(cat "$FM_FAKE_LSOF_COUNT")
 count=$((count + 1))
 printf '%s\n' "$count" > "$FM_FAKE_LSOF_COUNT"
-if [ "$count" -eq 2 ]; then
+if [ "$count" -eq 3 ]; then
   i=0
   while [ "$i" -lt 100 ]; do
     [ ! -e "$FM_FAKE_EXEC_DONE" ] || break
@@ -4300,6 +4286,7 @@ SH
     kill -KILL "$pid" 2>/dev/null || true
   fi
   expect_code 0 "$rc" "exec-changed-process: teardown should succeed"
+  assert_present "$done_flag" "exec-changed-process: exec never happened"
   [ "$survived" -eq 0 ] || fail "exec-changed-process: exec-changed leaked process survived teardown"
   pass "an exec change preserves birth identity and the process is reaped"
 }
@@ -4392,7 +4379,7 @@ count=0
 [ ! -f "$case_dir/lsof-count" ] || count=\$(cat "$case_dir/lsof-count")
 count=\$((count + 1))
 printf '%s\n' "\$count" > "$case_dir/lsof-count"
-if [ "\$count" -eq 1 ]; then
+if [ "\$count" -le 2 ]; then
   printf 'p%s\nfcwd\nn%s\n' '$fake_pid' '$wt_path'
 fi
 EOF
@@ -4643,6 +4630,226 @@ test_missing_adapter_sibling_refuses_before_cleanup
 test_forced_child_missing_adapter_sibling_refuses_before_cleanup
 test_forced_secondmate_own_missing_adapter_sibling_refuses_before_child_cleanup
 test_retained_sources_still_reach_the_ordinary_refusal
+# All resource identities below are fictitious. The shell kill builtin is
+# replaced only in the teardown process, never in the test or host tools.
+add_task_resource_fakes() {
+  local case_dir=$1
+  mkdir -p "$case_dir/data/task-x1/tools" "$case_dir/chrome-state"
+  cat > "$case_dir/resource-env" <<'SH'
+case "$0" in */fm-teardown.sh)
+  kill() {
+    [ -f "$FM_RESOURCE_CASE/closed" ] || return 90
+    printf 'signal %s\n' "$*" >> "$FM_RESOURCE_CASE/resources.log"
+    case "${2:-}" in
+      90000001|90000002) : > "$FM_RESOURCE_CASE/gone-${2}"; return 0 ;;
+      *) return 91 ;;
+    esac
+  }
+  ;;
+esac
+SH
+  cat > "$case_dir/fakebin/tmux" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = kill-window ]; then : > "$FM_RESOURCE_CASE/closed"; fi
+exit 0
+SH
+  cat > "$case_dir/fakebin/lsof" <<'SH'
+#!/usr/bin/env bash
+for pid in 90000001 90000002 90000003 90000004 90000005; do
+  [ ! -f "$FM_RESOURCE_CASE/gone-$pid" ] || continue
+  case "$pid" in
+    90000001) cwd="$FM_RESOURCE_CASE/data/task-x1/tools" ;;
+    90000002) cwd="$FM_RESOURCE_CASE/wt" ;;
+    90000004|90000005)
+      if [ "${FM_RESOURCE_INTERACTIVE_ROOT:-0}" = 1 ]; then cwd="$FM_RESOURCE_CASE/wt"
+      else cwd="$FM_RESOURCE_CASE/wt-other"; fi ;;
+    90000003) cwd="$FM_RESOURCE_CASE/wt-other" ;;
+  esac
+  printf 'p%s\nfcwd\nn%s\n' "$pid" "$cwd"
+done
+SH
+  cat > "$case_dir/fakebin/ps" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = -axo ]; then
+  count=0
+  [ ! -f "$FM_RESOURCE_CASE/ps-table-count" ] || count=$(cat "$FM_RESOURCE_CASE/ps-table-count")
+  count=$((count + 1))
+  printf '%s\n' "$count" > "$FM_RESOURCE_CASE/ps-table-count"
+  printf '8%07d 1 1234\n' "$count"
+  printf '90000001 1 90000001\n90000002 90000001 90000001\n'
+  if [ "${FM_RESOURCE_UNSAFE_GROUP:-0}" = 1 ]; then printf '90000003 1 90000001\n'; fi
+  exit 0
+fi
+case "${2:-}" in 9000000[1-5])
+  [ ! -f "$FM_RESOURCE_CASE/gone-${2}" ] || exit 1
+  case "${4:-}" in
+    lstart=) printf 'Sun Oct 11 10:00:00 2026\n' ;;
+    pgid=) printf '90000001\n' ;;
+    ppid=) printf '1\n' ;;
+    comm=)
+      case "$2" in
+        90000004) printf '/Applications/Example Editor.app/Contents/MacOS/editor\n' ;;
+        90000002|90000005) printf '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome\n' ;;
+        *) printf '/usr/bin/node\n' ;;
+      esac ;;
+    command=)
+      case "$2" in
+        90000001) printf 'node /tools/chrome-devtools-axi/dist/src/bridge.js\n' ;;
+        90000002) printf 'chrome --headless --isolated\n' ;;
+        *) printf 'chrome --user-data-dir=/personal\n' ;;
+      esac ;;
+  esac
+  exit 0 ;;
+esac
+exec "$REAL_PS_FOR_TEST" "$@"
+SH
+  cat > "$case_dir/fakebin/chrome-devtools-axi" <<'SH'
+#!/usr/bin/env bash
+[ -f "$FM_RESOURCE_CASE/closed" ] || exit 90
+printf 'chrome %s %s %s\n' "$*" "$CHROME_DEVTOOLS_AXI_SESSION" "$PWD" >> "$FM_RESOURCE_CASE/resources.log"
+: > "$FM_RESOURCE_CASE/gone-90000001"
+: > "$FM_RESOURCE_CASE/gone-90000002"
+SH
+  cat > "$case_dir/fakebin/treehouse" <<'SH'
+#!/usr/bin/env bash
+[ -f "$FM_RESOURCE_CASE/closed" ] || exit 90
+: > "$FM_RESOURCE_CASE/returned"
+SH
+  cat > "$case_dir/fakebin/docker" <<'SH'
+#!/usr/bin/env bash
+printf 'docker %s\n' "$*" >> "$FM_RESOURCE_CASE/docker.log"
+case "$1" in
+  ps) printf 'aaaaaaaa\nbbbbbbbb\ncccccccc\ndddddddd\n' ;;
+  inspect)
+    id="${*: -1}"
+    case "$id" in
+      aaaaaaaa) label="$FM_RESOURCE_CASE/wt/subdir" ;;
+      bbbbbbbb) label="$FM_RESOURCE_CASE/wt-other" ;;
+      cccccccc) label= ;;
+      dddddddd)
+        if [ -f "$FM_RESOURCE_CASE/inspected-d" ]; then label="$FM_RESOURCE_CASE/wt-other"
+        else label="$FM_RESOURCE_CASE/wt"; : > "$FM_RESOURCE_CASE/inspected-d"; fi ;;
+    esac
+    printf '{"Id":"%s","Name":"/fixture-%s","State":{"Running":true},"Config":{"Labels":{"com.docker.compose.project.working_dir":"%s"}}}\n' "$id" "$id" "$label" ;;
+  stop)
+    [ -f "$FM_RESOURCE_CASE/closed" ] && [ -f "$FM_RESOURCE_CASE/returned" ] || exit 90
+    printf 'container %s\n' "${*: -1}" >> "$FM_RESOURCE_CASE/resources.log" ;;
+  *) exit 91 ;;
+esac
+SH
+  chmod +x "$case_dir/fakebin/"{tmux,lsof,ps,chrome-devtools-axi,treehouse,docker}
+}
+
+run_resource_teardown() {
+  local case_dir=$1; shift
+  FM_RESOURCE_CASE="$case_dir" BASH_ENV="$case_dir/resource-env" \
+    FM_PROC_ROOT_OVERRIDE="$case_dir/no-proc" \
+    FM_TEST_CHROME_STATE_DIR="$case_dir/chrome-state" \
+    run_teardown "$case_dir" "$@"
+}
+
+test_task_resources_stop_only_after_exit_and_return() {
+  local case_dir rc=0
+  case_dir=$(make_case task-resources)
+  write_meta "$case_dir" local-only ship
+  add_task_resource_fakes "$case_dir"
+  mkdir -p "$case_dir/wt-other"
+  printf 'tasktmp=%s\n' "$case_dir/wt-other" >> "$case_dir/state/task-x1.meta"
+  run_resource_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  expect_code 0 "$rc" "resource teardown should succeed"
+  assert_grep 'signal -TERM 90000001' "$case_dir/resources.log" "data-directory bridge was not stopped"
+  assert_grep 'signal -TERM 90000002' "$case_dir/resources.log" "headless browser was not stopped"
+  assert_no_grep 'signal .*9000000[345]' "$case_dir/resources.log" "outside process or interactive app was signaled"
+  assert_grep 'container aaaaaaaa' "$case_dir/resources.log" "attributed Compose container was not stopped"
+  assert_no_grep 'container [bcd]' "$case_dir/resources.log" "unattributed or changed container was stopped"
+  assert_grep 'left container cccccccc' "$case_dir/stderr" "unlabelled candidate was not reported"
+  assert_grep 'left container dddddddd' "$case_dir/stderr" "changed attribution was not reported"
+  assert_no_grep 'docker rm' "$case_dir/docker.log" "container was removed"
+  pass "task-data and headless processes stop after endpoint exit; only proven containers stop after worktree return"
+}
+
+test_task_chrome_stop_requires_entire_task_group() {
+  local case_dir rc unsafe
+  for unsafe in 0 1; do
+    case_dir=$(make_case "chrome-stop-$unsafe")
+    write_meta "$case_dir" local-only ship
+    add_task_resource_fakes "$case_dir"
+    printf '{"pid":90000001,"port":9224}\n' > "$case_dir/chrome-state/bridge.pid"
+    rc=0
+    FM_RESOURCE_UNSAFE_GROUP="$unsafe" run_resource_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+    expect_code 0 "$rc" "chrome resource teardown should succeed"
+    if [ "$unsafe" = 0 ]; then
+      assert_grep "chrome stop default $case_dir/data/task-x1" "$case_dir/resources.log" "safe bridge did not use chrome stop from task directory"
+      assert_no_grep 'signal' "$case_dir/resources.log" "already stopped Chrome received signals"
+    else
+      assert_no_grep 'chrome stop' "$case_dir/resources.log" "chrome stop targeted an outside group member"
+      assert_grep 'signal -TERM 90000001' "$case_dir/resources.log" "unsafe group did not use an individual bridge signal"
+      assert_grep 'left chrome stop for bridge' "$case_dir/stderr" "unsafe global stop was not reported"
+    fi
+  done
+  pass "Chrome stop requires a matched session PID, task descendants and an entirely task-owned group"
+}
+
+test_interactive_apps_refuse_before_endpoint_close() {
+  local case_dir rc=0
+  case_dir=$(make_case interactive-resource-root)
+  write_meta "$case_dir" local-only ship
+  add_task_resource_fakes "$case_dir"
+  FM_RESOURCE_INTERACTIVE_ROOT=1 run_resource_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  expect_code 1 "$rc" "interactive app must refuse the worktree return"
+  assert_absent "$case_dir/closed" "protected app refusal closed endpoint"
+  assert_absent "$case_dir/resources.log" "protected app refusal stopped task processes"
+  assert_absent "$case_dir/docker.log" "protected app refusal inspected containers"
+  assert_grep 'left process 90000004' "$case_dir/stderr" "editor omission was not reported"
+  assert_grep 'left process 90000005' "$case_dir/stderr" "personal browser omission was not reported"
+  assert_grep 'REFUSED: interactive browser or editor' "$case_dir/stderr" "protected app refusal was not reported"
+  pass "an interactive browser or editor in task roots refuses teardown before endpoint close or pool return"
+}
+
+test_task_data_symlink_never_attributes_another_task() {
+  local case_dir rc=0
+  case_dir=$(make_case symlink-resource-data)
+  write_meta "$case_dir" local-only ship
+  add_task_resource_fakes "$case_dir"
+  mv "$case_dir/data/task-x1" "$case_dir/data/another-task"
+  ln -s another-task "$case_dir/data/task-x1"
+  run_resource_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  expect_code 0 "$rc" "a symlinked data directory should be omitted from attribution"
+  assert_no_grep 'signal .*90000001' "$case_dir/resources.log" "symlinked task data authorized a signal"
+  assert_grep 'signal -TERM 90000002' "$case_dir/resources.log" "owned headless process was not stopped"
+  pass "a symlinked task data directory never attributes another task's processes"
+}
+
+test_refused_and_unknown_worktrees_leave_resources() {
+  local case_dir rc
+  case_dir=$(make_case refused-resource-cleanup)
+  write_meta "$case_dir" local-only ship
+  add_task_resource_fakes "$case_dir"
+  printf 'unlanded\n' > "$case_dir/wt/dirty"
+  rc=0
+  run_resource_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  expect_code 1 "$rc" "dirty worktree must refuse"
+  assert_absent "$case_dir/closed" "refusal closed endpoint"
+  assert_absent "$case_dir/resources.log" "refusal stopped task resources"
+  assert_absent "$case_dir/docker.log" "refusal inspected containers"
+  # The path exists but is explicitly reassigned; its own task resources must
+  # remain outside this record's attribution. Existing slot regressions cover it.
+  case_dir=$(make_case unknown-resource-worktree)
+  add_task_resource_fakes "$case_dir"
+  fm_write_meta "$case_dir/state/task-x1.meta" \
+    "window=firstmate:fm-task-x1" "endpoint_task_id=task-x1" \
+    "worktree=$case_dir/missing" "project=$case_dir/project" \
+    "kind=ship" "mode=local-only" "spawn_gen=teardown-test-task-x1"
+  rc=0
+  run_resource_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  expect_code 0 "$rc" "missing worktree records should still retire"
+  assert_absent "$case_dir/resources.log" "unknown worktree authorized resource cleanup"
+  assert_absent "$case_dir/docker.log" "unknown worktree authorized Docker inventory"
+  assert_grep 'owned worktree path unavailable' "$case_dir/stderr" "unknown attribution was not reported"
+  pass "refused teardown and an unknown worktree never stop task resources"
+}
+
+
 test_local_only_fork_remote_allows
 test_teardown_closes_the_backlog_item_itself
 test_teardown_closes_a_gerrit_task_with_its_change_url_as_a_note
@@ -4740,7 +4947,7 @@ test_another_branchs_parked_run_is_never_touched
 test_own_autonomous_run_is_left_alone
 test_leaked_worktree_process_is_reaped
 test_leaked_tasktmp_process_is_reaped
-test_lsof_absent_reaps_tmux_process_group
+test_lsof_absent_refuses_unattributed_signals
 test_lsof_error_refuses_before_removal
 test_reused_pid_identity_is_not_force_killed
 test_exec_changed_process_is_still_reaped
@@ -4748,3 +4955,11 @@ test_process_spawned_during_grace_is_reaped_on_later_pass
 test_persistent_scan_refuses_after_bounded_retries
 test_process_exit_during_identity_lookup_does_not_refuse
 test_run_abort_precedes_process_reap_precedes_worktree_removal
+
+test_task_resources_stop_only_after_exit_and_return
+test_task_chrome_stop_requires_entire_task_group
+test_refused_and_unknown_worktrees_leave_resources
+
+test_interactive_apps_refuse_before_endpoint_close
+
+test_task_data_symlink_never_attributes_another_task

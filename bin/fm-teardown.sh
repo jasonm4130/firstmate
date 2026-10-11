@@ -241,8 +241,8 @@
 # removal so the operator can see what happened.
 #
 # Pre-teardown cleanup sequence (runs once every landed/discard-work safety
-# refusal above has already passed, and BEFORE any worktree return, branch
-# delete, or backend kill below - a still-active run or a leaked process may
+# refusal above has already passed, and BEFORE
+# any worktree return or branch delete below - a still-active run or a leaked process may
 # own live work in that worktree):
 #   Fix 1 - conclude the task's own no-mistakes run. A ship task's worktree can
 #     be torn down while its no-mistakes pipeline run is still PARKED at a gate
@@ -270,20 +270,23 @@
 #     A run already terminal
 #     (an outcome is set) or not parked at a gate is left untouched. Idempotent:
 #     an already-aborted run reads back terminal and is skipped on retry.
-#   Fix 2 - reap leaked descendant processes. A backgrounded/disowned process
+#   Fix 2 - close the exact task endpoint, then reap leaked descendant processes.
+#     A backgrounded/disowned process
 #     started under the worktree (or its per-task tasktmp) does not receive the
 #     SIGHUP/SIGTERM that closing the backend pane sends to its own foreground
 #     process group, so it survives reparented to init (observed 2026-08-03:
 #     two `go test` binaries, deadlines blown past by ~100x, pinning CPU for
 #     hours with no live task meta to attribute them to once teardown had
 #     already removed it). reap_task_worktree_processes finds every process
-#     whose CURRENT WORKING DIRECTORY is this task's own worktree or tasktmp
+#     whose CURRENT WORKING DIRECTORY is this task's own worktree or data/<id>
 #     root via `lsof -a -d cwd` (cheap: bounded by process count, not by
 #     walking the worktree's file tree) and sends TERM, then KILL after a short
-#     grace period to any survivor whose process identity still matches. Both
+#     grace period to any survivor whose process identity still matches. These
 #     roots are unique per task and never
-#     shared, so this can never reach another task's or the primary's
-#     processes. Idempotent: nothing left to find is a silent no-op.
+#     shared. Interactive browsers and editors refuse teardown. Missing lsof
+#     refuses, never falls back to an unbounded process group. Idempotent:
+#     nothing left to find is a silent no-op. bin/fm-task-resources-lib.sh owns
+#     the guarded Chrome stop and post-return Docker stop attribution.
 #   Fix 3 - sweep abandoned remote job workers. A remote job worker started
 #     from a worktree's own bin/ outlives that worktree's removal without
 #     being reachable by Fix 2, because its working directory is wherever it
@@ -332,6 +335,7 @@ for _teardown_source in \
   fm-tasks-axi-lib.sh \
   fm-backlog-transition-lib.sh \
   fm-timeout-lib.sh \
+  fm-task-resources-lib.sh \
   fm-backend.sh \
   fm-control-lib.sh \
   fm-lock-lib.sh \
@@ -383,6 +387,10 @@ unset _teardown_source
 . "$SCRIPT_DIR/fm-pending-reply-lib.sh"
 # shellcheck source=bin/fm-nm-run-lib.sh
 . "$SCRIPT_DIR/fm-nm-run-lib.sh"
+# shellcheck source=bin/fm-timeout-lib.sh
+. "$SCRIPT_DIR/fm-timeout-lib.sh"
+# shellcheck source=bin/fm-task-resources-lib.sh
+. "$SCRIPT_DIR/fm-task-resources-lib.sh"
 if [ "$#" -lt 1 ] || ! fm_task_id_path_safe "$1"; then
   echo "error: invalid teardown request" >&2
   exit 2
@@ -2153,67 +2161,23 @@ $dir_pids"
   TASK_PIDS=$(printf '%s\n' "$pids" | grep -E '^[0-9]+$' | sort -un || true)
 }
 
-reap_task_backend_process_group() {  # <label>
-  local label=$1 leader leader_start pgid current_pgid own_pgid
-  if [ "$BACKEND" != tmux ]; then
-    echo "warning: lsof is unavailable; cannot resolve a process-group fallback for $BACKEND task $ID" >&2
-    return 0
-  fi
-  leader=$(tmux display-message -p -t "$T" '#{pane_pid}' 2>/dev/null) || leader=""
-  case "$leader" in ''|*[!0-9]*)
-    echo "warning: lsof is unavailable; cannot resolve the tmux pane process group for $ID" >&2
-    return 0
-    ;;
-  esac
-  leader_start=$(task_process_identity "$leader") || {
-    echo "warning: lsof is unavailable; cannot identify the tmux pane process group for $ID" >&2
-    return 0
-  }
-  pgid=$(ps -o pgid= -p "$leader" 2>/dev/null) || pgid=""
-  pgid=$(printf '%s' "$pgid" | tr -d '[:space:]')
-  case "$pgid" in ''|*[!0-9]*|0|1)
-    echo "warning: lsof is unavailable; cannot resolve the tmux pane process group for $ID" >&2
-    return 0
-    ;;
-  esac
-  own_pgid=$(ps -o pgid= -p "$$" 2>/dev/null) || own_pgid=""
-  own_pgid=$(printf '%s' "$own_pgid" | tr -d '[:space:]')
-  if [ "$pgid" = "$own_pgid" ]; then
-    echo "warning: lsof is unavailable; refusing to signal teardown's own process group for $ID" >&2
-    return 0
-  fi
-  task_process_identity_matches "$leader" "$leader_start" || return 0
-  current_pgid=$(ps -o pgid= -p "$leader" 2>/dev/null) || current_pgid=""
-  current_pgid=$(printf '%s' "$current_pgid" | tr -d '[:space:]')
-  [ "$current_pgid" = "$pgid" ] || return 0
-  echo "teardown: reaping leaked $label process group for $ID: $pgid" >&2
-  kill -TERM -- "-$pgid" 2>/dev/null || true
-  sleep 1
-  if task_process_identity_matches "$leader" "$leader_start" \
-     && [ "$(ps -o pgid= -p "$leader" 2>/dev/null | tr -d '[:space:]')" = "$pgid" ] \
-     && kill -0 -- "-$pgid" 2>/dev/null; then
-    echo "teardown: force-killing leaked $label process group for $ID: $pgid" >&2
-    kill -KILL -- "-$pgid" 2>/dev/null || true
-  fi
-}
-
-# Reap every process rooted (by cwd) under this task's own worktree or tasktmp
-# - both unique per task and never shared - before either is removed. TERM
+# Reap every process rooted (by cwd) under this task's worktree or data/<id>.
+# tasktmp metadata cannot expand this process-attribution boundary. TERM
 # first, then KILL after a short grace period for anything still alive; a
 # process that exits on its own between the two passes is simply absent from
-# the recheck. A missing lsof uses the backend process-group fallback; an lsof
+# the recheck. Missing lsof refuses rather than signaling an unbounded group; an lsof
 # scan error refuses before destructive teardown.
 reap_task_worktree_processes() {  # <label> <dir>...
   local label=$1 pids pid identity current_pids i pass=1 max_passes=3
   local -a tracked_pids tracked_identities remaining_pids remaining_identities
   shift
   if ! command -v lsof >/dev/null 2>&1; then
-    reap_task_backend_process_group "$label"
-    return 0
+    echo "REFUSED: lsof unavailable; task cwd attribution cannot be proven for $ID" >&2
+    return 1
   fi
   while [ "$pass" -le "$max_passes" ]; do
-    if ! task_pids_under_roots "$@"; then
-      echo "REFUSED: cannot determine leaked processes under ${TASK_PIDS_FAILED_DIR:-<missing>} for $ID (lsof failed); preserving the worktree/tasktmp for manual inspection or retry." >&2
+    if ! task_signal_pids_under_roots "$@"; then
+      task_resource_scan_refusal
       return 1
     fi
     pids=$TASK_PIDS
@@ -2223,8 +2187,8 @@ reap_task_worktree_processes() {  # <label> <dir>...
     while IFS= read -r pid; do
       [ -n "$pid" ] || continue
       if ! identity=$(task_process_identity "$pid"); then
-        if ! task_pids_under_roots "$@"; then
-          echo "REFUSED: cannot determine leaked processes under ${TASK_PIDS_FAILED_DIR:-<missing>} for $ID (lsof failed); preserving the worktree/tasktmp for manual inspection or retry." >&2
+        if ! task_signal_pids_under_roots "$@"; then
+          task_resource_scan_refusal
           return 1
         fi
         if task_pid_list_contains "$TASK_PIDS" "$pid"; then
@@ -2242,8 +2206,8 @@ EOF
       pass=$((pass + 1))
       continue
     fi
-    if ! task_pids_under_roots "$@"; then
-      echo "REFUSED: cannot determine leaked processes under ${TASK_PIDS_FAILED_DIR:-<missing>} for $ID (lsof failed); preserving the worktree/tasktmp for manual inspection or retry." >&2
+    if ! task_signal_pids_under_roots "$@"; then
+      task_resource_scan_refusal
       return 1
     fi
     current_pids=$TASK_PIDS
@@ -2253,12 +2217,16 @@ EOF
       identity=${tracked_identities[$i]}
       if task_pid_list_contains "$current_pids" "$pid" \
          && task_process_identity_matches "$pid" "$identity"; then
-        kill -TERM "$pid" 2>/dev/null || true
+        if kill -TERM "$pid" 2>/dev/null; then
+          echo "teardown: sent TERM to process $pid (task $ID, $label)" >&2
+        else
+          echo "teardown: left process $pid: TERM failed or process exited" >&2
+        fi
       fi
     done
     sleep 1
-    if ! task_pids_under_roots "$@"; then
-      echo "REFUSED: cannot determine leaked processes under ${TASK_PIDS_FAILED_DIR:-<missing>} for $ID (lsof failed); preserving the worktree/tasktmp for manual inspection or retry." >&2
+    if ! task_signal_pids_under_roots "$@"; then
+      task_resource_scan_refusal
       return 1
     fi
     current_pids=$TASK_PIDS
@@ -2275,8 +2243,8 @@ EOF
     done
     if [ "${#remaining_pids[@]}" -gt 0 ]; then
       echo "teardown: force-killing leaked $label process(es) for $ID: ${remaining_pids[*]}" >&2
-      if ! task_pids_under_roots "$@"; then
-        echo "REFUSED: cannot determine leaked processes under ${TASK_PIDS_FAILED_DIR:-<missing>} for $ID (lsof failed); preserving the worktree/tasktmp for manual inspection or retry." >&2
+      if ! task_signal_pids_under_roots "$@"; then
+        task_resource_scan_refusal
         return 1
       fi
       current_pids=$TASK_PIDS
@@ -2285,14 +2253,18 @@ EOF
         identity=${remaining_identities[$i]}
         if task_pid_list_contains "$current_pids" "$pid" \
            && task_process_identity_matches "$pid" "$identity"; then
-          kill -KILL "$pid" 2>/dev/null || true
+          if kill -KILL "$pid" 2>/dev/null; then
+            echo "teardown: sent KILL to process $pid (task $ID, $label)" >&2
+          else
+            echo "teardown: left process $pid: KILL failed or process exited" >&2
+          fi
         fi
       done
     fi
     pass=$((pass + 1))
   done
-  if ! task_pids_under_roots "$@"; then
-    echo "REFUSED: cannot determine leaked processes under ${TASK_PIDS_FAILED_DIR:-<missing>} for $ID (lsof failed); preserving the worktree/tasktmp for manual inspection or retry." >&2
+  if ! task_signal_pids_under_roots "$@"; then
+    task_resource_scan_refusal
     return 1
   fi
   [ -z "$TASK_PIDS" ] && return 0
@@ -3465,6 +3437,40 @@ if [ "$BACKEND" = herdr ]; then
   TEARDOWN_HERDR_PANE=$FM_BACKEND_HERDR_PANE
 fi
 
+# Scouts and forced Orca teardown also need their id/path proof before any
+# endpoint close or process attribution, rather than deferring it until removal.
+if [ "$BACKEND" = orca ] && [ "$KIND" != secondmate ] && [ "$ORCA_PATH_MATCH_VERIFIED" != 1 ]; then
+  require_orca_worktree_path_match_if_present "$ORCA_WORKTREE_ID" "$WT" || exit 1
+  ORCA_PATH_MATCH_VERIFIED=1
+fi
+
+# Resolve process attribution before closing an endpoint or returning a slot.
+# Pool return can itself kill cwd processes, so a protected app refuses the
+# whole teardown rather than merely being omitted from our signal list.
+TASK_RESOURCE_ROOT=
+TASK_RESOURCE_DATA=
+if [ "$KIND" != secondmate ] && teardown_owns_worktree && [ -n "$WT" ] && [ -d "$WT" ]; then
+  TASK_RESOURCE_ROOT=$(cd "$WT" && pwd -P)
+  if [ "$TASK_RESOURCE_ROOT" = / ]; then
+    echo "REFUSED: unsafe worktree root for $ID; task resources left untouched" >&2
+    exit 1
+  fi
+  if [ -d "$DATA/$ID" ] && [ ! -L "$DATA/$ID" ] \
+     && [ "$(cd "$DATA/$ID" && pwd -P)" = "$(cd "$DATA" && pwd -P)/$ID" ]; then
+    TASK_RESOURCE_DATA="$DATA/$ID"
+  fi
+  if ! command -v lsof >/dev/null 2>&1; then
+    echo "REFUSED: lsof unavailable; task cwd attribution cannot be proven for $ID" >&2
+    exit 1
+  fi
+  if ! task_signal_pids_under_roots "$WT" "$TASK_RESOURCE_DATA"; then
+    task_resource_scan_refusal
+    exit 1
+  fi
+elif [ "$KIND" != secondmate ]; then
+  echo "teardown: left task resources for $ID: owned worktree path unavailable" >&2
+fi
+
 BACKLOG_CLOSED=0
 BACKLOG_TRANSITION=$TEARDOWN_BACKLOG_TRANSITION
 BACKLOG_TRANSITION_FLAGS=()
@@ -3543,82 +3549,10 @@ else
   fi
 fi
 
-# Every landed/discard-work refusal above has now passed (or --force skipped
-# them). Fix 1 and Fix 2 (see script header) run here, unconditionally on
-# --force, and before ANY destructive step below - a still-parked run or a
-# leaked process can own live work in this exact worktree. Not for
-# kind=secondmate: a secondmate home's own runtime lifecycle is owned by the
-# dedicated process-event and firstmate-home removal machinery further below,
-# not by task-worktree cleanup.
-if [ "$KIND" != secondmate ] && teardown_owns_worktree; then
+if [ -n "$TASK_RESOURCE_ROOT" ]; then
   conclude_task_no_mistakes_run "$WT"
-  reap_task_worktree_processes worktree "$WT" "$TASK_TMP"
-elif [ "$KIND" != secondmate ]; then
-  reap_task_worktree_processes tasktmp "$TASK_TMP"
 fi
-if [ "$KIND" = ship ] && teardown_owns_worktree && [ -e "$CONFIG/pipeline-spend" ]; then
-  FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" FM_CONFIG_OVERRIDE="$CONFIG" \
-    "$SCRIPT_DIR/fm-pipeline-spend.sh" record "$ID" >/dev/null \
-    || echo "warning: could not record $ID's no-mistakes pipeline spend; cleanup continues" >&2
-fi
-
-# Fix 3 (see script header): sweep remote job workers abandoned by an already
-# pruned code root. Best effort - a sweep failure never blocks this teardown.
-"$SCRIPT_DIR/fm-remote-job-reap-orphans.sh" >&2 || true
-
-# Best-effort: drop the local task branch so the shared repo does not accumulate refs.
-if [ "$BACKEND" = orca ] && [ "$KIND" != secondmate ]; then
-  if [ "$ORCA_PATH_MATCH_VERIFIED" != 1 ]; then
-    require_orca_worktree_path_match_if_present "$ORCA_WORKTREE_ID" "$WT" || exit 1
-    ORCA_PATH_MATCH_VERIFIED=1
-  fi
-  if [ -d "$WT" ]; then
-    branch=$(git -C "$WT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
-    if [ "$branch" != "HEAD" ]; then
-      if git -C "$WT" checkout --detach -q 2>/dev/null; then
-        git -C "$WT" branch -D "$branch" >/dev/null 2>&1 || true
-      fi
-    fi
-    rm -f "$WT/.claude/settings.local.json" "$WT/.opencode/plugins/fm-turn-end.js" \
-      "$WT/.opencode/plugins/fm-busy-state.js" \
-      "$WT/.fm-grok-turnend" "$WT/.fm-kimi-turnend"
-  fi
-  if [ -n "$T_ORCA" ]; then
-    fm_backend_kill "$BACKEND" "$T" "$(meta_value "$META" zellij_tab_id)" "fm-$ID" \
-      || { endpoint_close_refusal "$ID" "$BACKEND" "$T" 0; exit 1; }
-  fi
-  fm_backend_remove_worktree "$BACKEND" "$ORCA_WORKTREE_ID"
-elif [ "$KIND" != secondmate ] && ! teardown_owns_worktree; then
-  :
-elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
-  branch=$(git -C "$WT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
-  if [ "$branch" != "HEAD" ]; then
-    if git -C "$WT" checkout --detach -q 2>/dev/null; then
-      git -C "$WT" branch -D "$branch" >/dev/null 2>&1 || true
-    fi
-  fi
-  # Remove our hook file so a reused pool worktree cannot fire signals for a dead task.
-  rm -f "$WT/.claude/settings.local.json" "$WT/.opencode/plugins/fm-turn-end.js" \
-    "$WT/.fm-grok-turnend" "$WT/.fm-kimi-turnend"
-  # Kills remaining processes in the worktree (including the agent), resets, returns
-  # to pool. treehouse resolves the pool from the working directory, so run it from
-  # the project. teardown_treehouse_return tolerates transient and stale git locks
-  # left by a killed crew process; see the script header for retry and stale-lock proof.
-  post_lock_cleanup_check=
-  if [ "$FORCE" != "--force" ] && [ "$KIND" != scout ] && [ "$KIND" != secondmate ]; then
-    post_lock_cleanup_check=validate_worktree_teardown_safety
-  fi
-  teardown_treehouse_return "$WT" "$PROJ" "worktree" "$post_lock_cleanup_check" || {
-    echo "error: treehouse return failed for worktree $WT; teardown aborted" >&2
-    exit 1
-  }
-  # The slot is back in the pool, so this task's claim on it is spent. Dropping
-  # it here - and only after a return that succeeded - keeps a returned slot
-  # unclaimed until its next holder claims it, and leaves the claim in place
-  # whenever the return did not actually happen.
-  fm_treehouse_slot_owner_release "$WT" "$ID"
-fi
-
+TASK_ENDPOINT_CLOSED=1
 HERDR_PRESENTATION_JOURNAL="$STATE/$ID.herdr-presentation"
 # teardown_herdr_journal_orphaned: true when the task's own journal names
 # nothing the session-start sweep could still close - a version 1 attempt whose
@@ -3657,7 +3591,7 @@ if [ "$BACKEND" = herdr ] \
 fi
 
 if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]; then
-  # The presentation lock was acquired before the worktree return above; a
+  # The presentation lock was acquired before this destructive phase; a
   # contended lock already refused this teardown while everything was intact.
   if teardown_herdr_session_lock_held "$HERDR_PRESENTATION_SESSION"; then
     # stderr is deliberately NOT discarded here. This is the highest-frequency
@@ -3679,9 +3613,13 @@ elif [ "$BACKEND" = herdr ]; then
   else
     echo "warning: herdr session presentation lock path is unavailable; skipping the pane close rather than closing unlocked" >&2
   fi
-elif [ "$BACKEND" != orca ] && [ "$TEARDOWN_WINDOWLESS" != 1 ]; then
+elif [ "$BACKEND" = orca ] && [ -z "$T_ORCA" ]; then
+  : # Cleanup recovery has a worktree but no launched terminal to close.
+elif [ "$TEARDOWN_WINDOWLESS" != 1 ]; then
   fm_backend_kill "$BACKEND" "$T" "$(meta_value "$META" zellij_tab_id)" "fm-$ID" \
-    || endpoint_close_refusal "$ID" "$BACKEND" "$T" 1 || exit 1
+    || { TASK_ENDPOINT_CLOSED=0; endpoint_close_refusal "$ID" "$BACKEND" "$T" "$([ "$BACKEND" = orca ] && echo 0 || echo 1)" || exit 1; }
+  # bin/backends/orca.sh's close contract is best effort, not an exit proof.
+  [ "$BACKEND" != orca ] || TASK_ENDPOINT_CLOSED=0
 fi
 if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]; then
   if [ "$(fm_backend_herdr_pane_agent_state "$HERDR_PRESENTATION_SESSION" "$HERDR_PRESENTATION_PANE")" = dead ]; then
@@ -3709,6 +3647,87 @@ if [ "$BACKEND" = herdr ]; then
     echo "error: herdr pane $T for $ID is not confirmed gone after its close was refused, skipped, or failed; retaining every durable task record - rerun teardown once the close can run under the session lock" >&2
     exit 1
   fi
+fi
+
+# Every landed/discard-work refusal above has now passed (or --force skipped
+# them). Fix 1 and Fix 2 (see script header) run here only after a confirmed
+# endpoint close, and before worktree destruction below - a still-parked run or a
+# leaked process can own live work in this exact worktree. Not for
+# kind=secondmate: a secondmate home's own runtime lifecycle is owned by the
+# dedicated process-event and firstmate-home removal machinery further below,
+# not by task-worktree cleanup.
+if [ -n "$TASK_RESOURCE_ROOT" ] && [ "$TASK_ENDPOINT_CLOSED" = 1 ]; then
+  stop_task_chrome_bridges "$WT" "$TASK_RESOURCE_DATA"
+  reap_task_worktree_processes worktree "$WT" "$TASK_RESOURCE_DATA"
+elif [ -n "$TASK_RESOURCE_ROOT" ]; then
+  task_pids_under_roots "$WT" "$TASK_RESOURCE_DATA" || exit 1
+  while IFS= read -r task_resource_pid; do
+    [ -n "$task_resource_pid" ] || continue
+    echo "teardown: left process $task_resource_pid: task agent exit is not confirmed" >&2
+  done <<< "$TASK_PIDS"
+  echo "teardown: left Docker containers: task agent exit is not confirmed" >&2
+fi
+if [ "$KIND" = ship ] && teardown_owns_worktree && [ -e "$CONFIG/pipeline-spend" ]; then
+  FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" FM_CONFIG_OVERRIDE="$CONFIG" \
+    "$SCRIPT_DIR/fm-pipeline-spend.sh" record "$ID" >/dev/null \
+    || echo "warning: could not record $ID's no-mistakes pipeline spend; cleanup continues" >&2
+fi
+
+# Fix 3 (see script header): sweep remote job workers abandoned by an already
+# pruned code root. Best effort - a sweep failure never blocks this teardown.
+"$SCRIPT_DIR/fm-remote-job-reap-orphans.sh" >&2 || true
+
+# Best-effort: drop the local task branch so the shared repo does not accumulate refs.
+if [ "$BACKEND" = orca ] && [ "$KIND" != secondmate ]; then
+  if [ "$ORCA_PATH_MATCH_VERIFIED" != 1 ]; then
+    require_orca_worktree_path_match_if_present "$ORCA_WORKTREE_ID" "$WT" || exit 1
+    ORCA_PATH_MATCH_VERIFIED=1
+  fi
+  if [ -d "$WT" ]; then
+    branch=$(git -C "$WT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
+    if [ "$branch" != "HEAD" ]; then
+      if git -C "$WT" checkout --detach -q 2>/dev/null; then
+        git -C "$WT" branch -D "$branch" >/dev/null 2>&1 || true
+      fi
+    fi
+    rm -f "$WT/.claude/settings.local.json" "$WT/.opencode/plugins/fm-turn-end.js" \
+      "$WT/.opencode/plugins/fm-busy-state.js" \
+      "$WT/.fm-grok-turnend" "$WT/.fm-kimi-turnend"
+  fi
+  fm_backend_remove_worktree "$BACKEND" "$ORCA_WORKTREE_ID"
+elif [ "$KIND" != secondmate ] && ! teardown_owns_worktree; then
+  :
+elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
+  branch=$(git -C "$WT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
+  if [ "$branch" != "HEAD" ]; then
+    if git -C "$WT" checkout --detach -q 2>/dev/null; then
+      git -C "$WT" branch -D "$branch" >/dev/null 2>&1 || true
+    fi
+  fi
+  # Remove our hook file so a reused pool worktree cannot fire signals for a dead task.
+  rm -f "$WT/.claude/settings.local.json" "$WT/.opencode/plugins/fm-turn-end.js" \
+    "$WT/.fm-grok-turnend" "$WT/.fm-kimi-turnend"
+  # Kills remaining processes in the worktree (including the agent), resets, returns
+  # to pool. treehouse resolves the pool from the working directory, so run it from
+  # the project. teardown_treehouse_return tolerates transient and stale git locks
+  # left by a killed crew process; see the script header for retry and stale-lock proof.
+  post_lock_cleanup_check=
+  if [ "$FORCE" != "--force" ] && [ "$KIND" != scout ] && [ "$KIND" != secondmate ]; then
+    post_lock_cleanup_check=validate_worktree_teardown_safety
+  fi
+  teardown_treehouse_return "$WT" "$PROJ" "worktree" "$post_lock_cleanup_check" || {
+    echo "error: treehouse return failed for worktree $WT; teardown aborted" >&2
+    exit 1
+  }
+  # The slot is back in the pool, so this task's claim on it is spent. Dropping
+  # it here - and only after a return that succeeded - keeps a returned slot
+  # unclaimed until its next holder claims it, and leaves the claim in place
+  # whenever the return did not actually happen.
+  fm_treehouse_slot_owner_release "$WT" "$ID"
+fi
+
+if [ "$KIND" != secondmate ] && [ -n "$TASK_RESOURCE_ROOT" ] && [ "$TASK_ENDPOINT_CLOSED" = 1 ]; then
+  stop_task_docker_containers "$TASK_RESOURCE_ROOT"
 fi
 if [ "$KIND" != secondmate ]; then
   if ! FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" \
