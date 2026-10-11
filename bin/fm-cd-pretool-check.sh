@@ -8,8 +8,9 @@
 # bin/fm-cd-command-policy.mjs is the sole owner of the block/allow decision; it
 # reuses the shell classifier owned by bin/fm-arm-command-policy.mjs. This
 # wrapper only scopes the guard to the real primary checkout, acquires the
-# harness payload, invokes that policy, and renders the established harness
-# responses. It never executes, sources, evaluates, or expands the command.
+# harness payload, invokes that policy with that checkout as the home root a
+# plain `cd` may return to, and renders the established harness responses. It
+# never executes, sources, evaluates, or expands the command.
 # See docs/cd-guard.md for the complete contract and validation record.
 #
 # Usage:
@@ -53,7 +54,8 @@ With no --command, reads a PreToolUse-style JSON payload on stdin (Grok
 toolInput.command, or Claude/Codex tool_input.command).
 Fires only in the real primary firstmate checkout; it is a silent no-op in a
 crewmate/scout task worktree or any non-firstmate repo.
-Exits 0 to allow and 2 to deny a persistent top-level cwd change.
+Exits 0 to allow and 2 to deny a persistent top-level cwd change; a plain
+cd to this checkout's own absolute root path is allowed.
 The deny reason is written to stderr, with a Grok decision object on stdout
 unless --claude is supplied.
 With --cursor, a deny is Cursor's own decision object on stdout and exit 0,
@@ -163,7 +165,7 @@ POLICY="$FM_ROOT/bin/fm-cd-command-policy.mjs"
 command -v node >/dev/null 2>&1 || exit 0
 [ -f "$POLICY" ] || exit 0
 
-POLICY_OUTPUT=$(node "$POLICY" --command "$CMD" 2>/dev/null) || exit 0
+POLICY_OUTPUT=$(node "$POLICY" --command "$CMD" --home "$FM_ROOT" 2>/dev/null) || exit 0
 [ -n "$POLICY_OUTPUT" ] || exit 0
 
 TAB=$(printf '\t')

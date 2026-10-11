@@ -5,7 +5,8 @@
 // A stray persistent top-level `cd projects/<clone>` silently relocates the
 // primary shell, so the next firstmate-owned command (a backlog write, an
 // fm-* lifecycle call, tasks-axi) runs inside a project clone instead of the
-// home. This policy blocks exactly that class of command; the environmental
+// home. This policy blocks exactly that class of command, except a plain
+// `cd <home-root>` that returns the shell to the home itself; the environmental
 // scoping to the real primary checkout lives in the bin/fm-cd-pretool-check.sh
 // transport, not here. See docs/cd-guard.md for the full contract.
 //
@@ -13,15 +14,17 @@
 // bin/fm-arm-command-policy.mjs, the sole owner of firstmate's shell
 // classification, so this guard never duplicates shell lexing. This policy
 // never evaluates, expands, sources, or runs any byte of the submitted command;
-// it inspects lexical command positions only.
+// it inspects lexical command positions only. The home-root comparison resolves
+// one literal absolute path argument on the filesystem and nothing more.
 
 import { Lexer, splitProgram, commandPosition } from "./fm-arm-command-policy.mjs";
 import { realpathSync } from "node:fs";
+import { isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const REASONS = {
   "persistent-cd":
-    "a persistent top-level directory change in the primary firstmate checkout is blocked; it would move the shell out of the home so a later firstmate-owned command runs inside a project clone. Reach the target without moving the shell - use git -C <dir> or an absolute path on the command itself - or scope the cd to a subshell like (cd <dir> && ...).",
+    "a persistent top-level directory change in the primary firstmate checkout is blocked; it would move the shell out of the home so a later firstmate-owned command runs inside a project clone. Reach the target without moving the shell - use git -C <dir> or an absolute path on the command itself - or scope the cd to a subshell like (cd <dir> && ...). Only a plain cd to this home's own absolute root path is allowed, to return the shell home.",
 };
 
 // Directory-changing builtins that mutate the calling shell's own cwd.
@@ -68,7 +71,29 @@ function hasCommandQueryPrefix(position) {
   return false;
 }
 
-function decision(command) {
+function canonicalPath(path) {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path.length > 1 ? path.replace(/\/+$/, "") : path;
+  }
+}
+
+// A plain `cd <home-root>` puts the shell back where every firstmate-owned
+// command expects it, so it is the one persistent cwd change allowed: the cd
+// builtin itself (not pushd or popd) with exactly one literal, absolute,
+// option-free argument that resolves to the home root.
+function returnsHome(position, wordIndex, home) {
+  if (!home || position.words[wordIndex].value !== "cd") return false;
+  const args = position.words.slice(wordIndex + 1);
+  if (args.length !== 1) return false;
+  const [target] = args;
+  if (!target.literal || target.subs.length > 0 || target.unquotedExpansion) return false;
+  if (!isAbsolute(target.value)) return false;
+  return canonicalPath(target.value) === canonicalPath(home);
+}
+
+function decision(command, home = "") {
   const lexed = new Lexer(command).tokenize();
   // Fail open on syntax this classifier cannot tokenize. The cd-guard's threat
   // model is agent mistakes - an accidental bare `cd projects/foo` always
@@ -94,13 +119,14 @@ function decision(command) {
     if (!command) continue;
     if (!CD_BUILTINS.has(command.value)) continue;
     if (position.wrappers.some((wrapper) => FORKING_WRAPPERS.has(wrapper))) continue;
+    if (returnsHome(position, wordIndex, home)) continue;
     return deny("persistent-cd");
   }
   return { decision: "allow" };
 }
 
 function parseArguments(argv) {
-  const result = { command: "", commandSet: false };
+  const result = { command: "", commandSet: false, home: "" };
   for (let i = 0; i < argv.length; i += 1) {
     const name = argv[i];
     if (name === "--command") {
@@ -113,6 +139,12 @@ function parseArguments(argv) {
     if (name.startsWith("--command=")) {
       result.command = name.slice("--command=".length);
       result.commandSet = true;
+      continue;
+    }
+    if (name === "--home") {
+      if (i + 1 >= argv.length) throw new Error("--home requires a value");
+      result.home = argv[i + 1];
+      i += 1;
       continue;
     }
     throw new Error(`unknown argument: ${name}`);
@@ -137,7 +169,7 @@ if (invokedDirectly()) {
     if (!args.commandSet || !args.command) {
       process.stdout.write("allow\n");
     } else {
-      const result = decision(args.command);
+      const result = decision(args.command, args.home);
       if (result.decision === "allow") {
         process.stdout.write("allow\n");
       } else {

@@ -104,6 +104,14 @@ matrix_case B24 deny 'command builtin cd projects/foo'
 matrix_case B25 deny 'builtin command cd projects/foo'
 matrix_case B26 deny 'command -p cd projects/foo'
 matrix_case B27 deny 'command -- cd projects/foo'
+# The return-to-home carve-out is exactly a plain cd to the checkout's own root.
+matrix_case B28 deny "cd $PRIMARY/projects/foo"
+matrix_case B29 deny "pushd $PRIMARY"
+matrix_case B30 deny "cd $PRIMARY && cd projects/foo"
+matrix_case B31 deny "cd -P $PRIMARY"
+matrix_case B32 deny "cd $PRIMARY $PRIMARY"
+matrix_case B33 deny 'cd "$FM_HOME"'
+matrix_case B34 deny "cd ${PRIMARY%/*}"
 
 # ALLOW: not a persistent top-level cwd change (scoped, data, or non-cd).
 matrix_case A01 allow 'git -C projects/foo status'
@@ -142,6 +150,10 @@ matrix_case A33 allow 'command -v cd'
 matrix_case A34 allow 'command -V cd'
 matrix_case A35 allow 'command -pv cd'
 matrix_case A36 allow 'command -vp cd'
+matrix_case A37 allow "cd $PRIMARY"
+matrix_case A38 allow "cd '$PRIMARY/'"
+matrix_case A39 allow "cd $PRIMARY && tasks-axi add x"
+matrix_case A40 allow "builtin cd $PRIMARY"
 
 MATRIX_TMP=$(mktemp -d "${TMPDIR:-/tmp}/fm-cd-policy-matrix.XXXXXX")
 FM_TEST_CLEANUP_DIRS+=("$MATRIX_TMP")
@@ -279,7 +291,13 @@ test_e2e_cwd_leak_regression() {
   out=$("$CHECK" --claude --command 'cd projects/clone' 2>&1); rc=$?
   expect_code 2 "$rc" "guard must deny the stray persistent cd that caused the leak"
   assert_contains "$out" '[persistent-cd]' "leak-preventing block must carry the reason code"
-  pass "cd-guard: reproduces the cwd leak and denies the exact command that causes it"
+
+  # A shell that drifted by a path the guard never saw can still return home:
+  # a plain cd to the checkout root is allowed from inside the clone.
+  out=$(cd "$home/projects/clone" && "$CHECK" --claude --command "cd $PRIMARY" 2>&1); rc=$?
+  expect_code 0 "$rc" "guard must allow a drifted shell to cd back to the home root: $out"
+  [ -z "$out" ] || fail "the return-to-home allow must produce no output: $out"
+  pass "cd-guard: reproduces the cwd leak, denies the exact command that causes it, and allows the return home"
 }
 
 # --- fail-open transport behavior ------------------------------------------
@@ -368,6 +386,10 @@ test_policy_cli_direct() {
     || fail "policy CLI must allow a subshell-local cd"
   [ "$(node "$policy")" = allow ] \
     || fail "policy CLI must allow when no command is supplied"
+  [ "$(node "$policy" --command "cd $PRIMARY" --home "$PRIMARY")" = allow ] \
+    || fail "policy CLI must allow a plain cd to the --home root"
+  [ "$(node "$policy" --command "cd $PRIMARY" | cut -f1)" = deny ] \
+    || fail "policy CLI without --home must deny every persistent cd"
   pass "cd-guard: fm-cd-command-policy.mjs CLI honors the deny/allow output contract"
 }
 

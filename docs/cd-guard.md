@@ -42,6 +42,8 @@ This covers a bare `cd projects/foo`, `cd ..`, `cd`, `cd -`, an absolute `cd /so
 
 The guard **allows** everything else, including these safe scoped forms that must never be blocked:
 
+- A plain `cd <home-root>` that returns the shell to the home: the `cd` builtin with exactly one literal, absolute, option-free argument that resolves to this checkout's own root, alone or as one element of a list whose other elements are judged as usual.
+
 - A command that reaches a target without changing the shell's own cwd: `git -C <dir> ...`, `make -C <dir> ...`, or an absolute path on the command itself.
 - A directory change that does not persist to the parent shell: a subshell `(cd x && ...)`, a `bash -c 'cd ...'` / `sh -c` / `zsh -c` payload, an `env -C <dir> ...`, a `find ... -execdir` runner, a pipeline stage (`cd x | cmd`), or a backgrounded `cd x &`.
 - A `cd` behind a forking or exec'ing wrapper (`env`, `sudo`, `nohup`, `timeout`, `gtimeout`, `exec`), which runs in a child and never persists (and generally just fails, since `cd` is a builtin with no external program).
@@ -50,7 +52,9 @@ The guard **allows** everything else, including these safe scoped forms that mus
 - The token `cd` appearing as data: quoted text (`echo "cd projects/foo"`), a comment, a substring of another word (`cdk`, `abcd`, `record`), a `printf` payload, or any later argument word.
 
 An absolute-path `cd` is blocked on purpose: the ALLOW carve-out for absolute paths is for commands that address a target by absolute path, not for `cd`, which relocates the shell itself regardless of whether its argument is relative or absolute.
-Blocking a top-level `cd` is safe in the strong sense: the guard's steady state is "always at the home", so a return-to-home `cd` is redundant rather than necessary, and the block never causes a wrong-directory write.
+Blocking a top-level `cd` is safe in the strong sense: the block never causes a wrong-directory write.
+The return-to-home carve-out exists because the shell can still drift out of the home by a path the guard does not see, such as an unguarded harness or an accepted non-goal below, and a supervisor whose cwd has drifted needs one way back to the directory its permission rules expect.
+A home path written through a variable, `~`, or `cd -P` is still blocked, because only a literal path can be compared without expanding the command.
 
 ### Accepted non-goals
 
@@ -71,6 +75,7 @@ Every deny carries one stable code in square brackets before its prose reason.
 
 The reason directs the caller to reach the target without moving the shell by using `git -C <dir>`, placing an absolute path on the intended command itself, or scoping the `cd` to a subshell.
 It does not permit `cd /home/project`, because an absolute-path `cd` remains a persistent directory change and is denied.
+It names the one exception, a plain `cd` to the home's own absolute root path.
 
 ## Transport and fail-open behavior
 
@@ -128,7 +133,7 @@ Every shell variable reference in the Grok hook command carries an inline defaul
 
 `tests/fm-cd-pretool-check.test.sh` owns the acceptance matrix.
 Every block and allow case runs through Codex-shaped stdin, Claude-shaped stdin, Grok-shaped stdin, OpenCode-shaped CLI, and Pi-shaped CLI entry forms.
-The suite also proves the end-to-end cwd-leak regression (a firstmate-owned backlog write leaking into a project clone, then denied at the exact command), the checkout scoping (fires in a git-cloned secondmate fixture, inert in a crewmate/scout linked worktree, inert outside a firstmate checkout, inert outside a git repo), the fail-open transport behavior, the prefilter fast path, the policy CLI output contract, and the per-harness wiring.
+The suite also proves the end-to-end cwd-leak regression (a firstmate-owned backlog write leaking into a project clone, then denied at the exact command, with the return to the home allowed), the checkout scoping (fires in a git-cloned secondmate fixture, inert in a crewmate/scout linked worktree, inert outside a firstmate checkout, inert outside a git repo), the fail-open transport behavior, the prefilter fast path, the policy CLI output contract, and the per-harness wiring.
 
 Run:
 
