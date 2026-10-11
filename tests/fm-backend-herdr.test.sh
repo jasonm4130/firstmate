@@ -166,6 +166,33 @@ SH
   printf '%s\n' "$fb"
 }
 
+# make_herdr_long_lived_server_fakebin: a `herdr` stub whose `server` stays
+# alive the way the real one does, recording its pid in
+# $FM_HERDR_SERVER_MARKER (whose presence also flips `status` to running).
+make_herdr_long_lived_server_fakebin() {  # <dir> -> echoes fakebin dir
+  local dir=$1 fb="$1/fakebin"
+  mkdir -p "$fb"
+  cat > "$fb/herdr" <<'SH'
+#!/usr/bin/env bash
+set -u
+case "${1:-}" in
+  status)
+    if [ -e "$FM_HERDR_SERVER_MARKER" ]; then
+      printf '{"server":{"running":true}}\n'
+    else
+      printf '{"server":{"running":false}}\n'
+    fi
+    ;;
+  server)
+    printf '%s\n' "$$" > "$FM_HERDR_SERVER_MARKER"
+    exec sleep 60
+    ;;
+esac
+SH
+  chmod +x "$fb/herdr"
+  printf '%s\n' "$fb"
+}
+
 # make_herdr_statefake: a STATEFUL `herdr` stub that models the parts of herdr's
 # real container behavior the workspace-leak fix (and the default-tab-prune
 # safety fix) depend on, so a full spawn->teardown cycle can be replayed
@@ -1229,6 +1256,39 @@ test_server_ensure_scrubs_home_and_harness_identity() {
   assert_contains "$output" "HERDR_SESSION=fmtest" "server_ensure lost explicit Herdr session routing"
   assert_contains "$output" "args=server --session fmtest" "server_ensure lost the trailing Herdr session flag"
   pass "fm_backend_herdr_server_ensure: scrubs home and harness identity without disturbing unrelated environment or session routing"
+}
+
+test_server_ensure_releases_every_caller_descriptor() {
+  local dir marker fb reader pid='' i
+  dir="$TMP_ROOT/server-detach"; mkdir -p "$dir"; marker="$dir/running"
+  fb=$(make_herdr_long_lived_server_fakebin "$dir")
+  # One pipe carries the caller's stdout, its stderr, and a descriptor it opened
+  # on purpose. The reader reaches end of file only once the caller has exited
+  # AND nothing it started still holds any of the three.
+  (
+    PATH="$fb:$PATH" FM_HERDR_SERVER_MARKER="$marker" \
+      bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_server_ensure fmtest >/dev/null 2>&1; echo "ensure=$?"' "$ROOT" 2>&1 3>&1 \
+      | cat > "$dir/out"
+    : > "$dir/eof"
+  ) &
+  reader=$!
+  for i in $(seq 1 100); do
+    [ ! -e "$dir/eof" ] || break
+    sleep 0.1
+  done
+  [ ! -s "$marker" ] || pid=$(cat "$marker")
+  if [ ! -e "$dir/eof" ]; then
+    [ -z "$pid" ] || kill "$pid" 2>/dev/null || true
+    wait "$reader" 2>/dev/null || true
+    fail "server_ensure left a caller descriptor open in the long-lived Herdr server launch: the reader saw no end of file within 10s"
+  fi
+  wait "$reader" 2>/dev/null || true
+  assert_contains "$(cat "$dir/out")" "ensure=0" "server_ensure did not report the long-lived server as started"
+  if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
+    fail "the started Herdr server did not outlive the caller that launched it"
+  fi
+  kill "$pid" 2>/dev/null || true
+  pass "fm_backend_herdr_server_ensure: the long-lived server keeps none of its caller's descriptors, so a piped caller sees end of file at once"
 }
 
 test_container_ensure_reuses_existing_workspace() {
@@ -5925,6 +5985,7 @@ test_workspace_ensure_other_home_ignores_the_launcher_identity
 test_container_ensure_refuses_an_ambiguous_home_label
 test_container_ensure_starts_server_and_workspace
 test_server_ensure_scrubs_home_and_harness_identity
+test_server_ensure_releases_every_caller_descriptor
 test_container_ensure_reuses_existing_workspace
 test_container_ensure_creates_with_no_focus_flag
 test_container_ensure_uses_secondmate_home_label

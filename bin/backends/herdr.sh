@@ -1663,16 +1663,27 @@ fm_backend_herdr_projection_order_best_effort() {  # <session> <created-workspac
 # NOT auto-start the server, so this must run before any workspace/tab/pane
 # call. The server outlives its launcher and passes its startup environment to
 # every later pane, so remove home, harness identity, and supervision selection
-# inherited from whichever agent happened to start it. Bounded poll for the
-# server to report running.
+# inherited from whichever agent happened to start it. The launch also sheds
+# every descriptor it inherited: the server and the shell waiting on it would
+# otherwise hold the caller's output open for the server's whole lifetime, so
+# a caller read through a pipe (an SSH session, a command substitution) never
+# sees end of file. That includes the copies bash parks on high descriptors
+# while a redirected call such as `server_ensure >/dev/null 2>&1` runs.
+# Bounded poll for the server to report running.
 fm_backend_herdr_server_ensure() {  # <session>
-  local session=$1 running out i
+  local session=$1 running out i fd
   running=$(fm_backend_herdr_cli "$session" status --json 2>/dev/null | jq -r '.server.running // false' 2>/dev/null)
   [ "$running" = "true" ] && return 0
   (
     unset FM_HOME FM_ROOT_OVERRIDE FM_STATE_OVERRIDE FM_DATA_OVERRIDE FM_PROJECTS_OVERRIDE FM_CONFIG_OVERRIDE \
       CURSOR_AGENT CURSOR_INVOKED_AS CLAUDECODE PI_CODING_AGENT FM_PI_HARNESS GROK_AGENT FM_SUPERVISION_MODEL
-    fm_backend_herdr_cli "$session" server </dev/null >/dev/null 2>&1 &
+    exec </dev/null >/dev/null 2>&1
+    for fd in /dev/fd/*; do
+      fd=${fd##*/}
+      case "$fd" in ''|*[!0-9]*|0|1|2) continue ;; esac
+      eval "exec $fd>&-"
+    done
+    fm_backend_herdr_cli "$session" server &
   ) || return 1
   for i in $(seq 1 20); do
     running=$(fm_backend_herdr_cli "$session" status --json 2>/dev/null | jq -r '.server.running // false' 2>/dev/null)

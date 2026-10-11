@@ -264,6 +264,11 @@ case "${1:-} ${2:-}" in
     ;;
   "server "*|"server ")
     printf 'true\n' > "$FM_FAKE_HERDR_RUNNING"
+    # A case can ask for a server that stays alive the way the real one does.
+    if [ -f "$FM_FAKE_STATE/herdr-server-stays" ]; then
+      printf '%s\n' "$$" > "$FM_FAKE_STATE/herdr-server.pid"
+      exec /bin/sleep 60
+    fi
     ;;
 esac
 exit 0
@@ -778,6 +783,34 @@ assert_contains "$DOCTOR_OUT" 'fix herdr-server=applied:' "--fix did not report 
 assert_contains "$DOCTOR_OUT" 'check herdr-server=ok:' "the started server was not confirmed by the re-check"
 [ ! -s "$CASE_LAUNCHCTL_LOG" ] || fail "the linux path invoked launchctl"
 pass "a non-darwin host skips launch agents and starts its herdr server directly"
+
+# --- --fix returns to a piped caller while the server it started lives on ----
+
+new_case Linux with-herdr no-gui
+touch "$CASE_STATE/herdr-server-stays"
+# doctor() reads the doctor through a pipe, as sshd does, so it returns only
+# once nothing the doctor started still holds that pipe.
+(
+  doctor --fix
+  printf '%s\n' "$DOCTOR_OUT" > "$CASE_STATE/fix.out"
+  printf '%s\n' "$DOCTOR_RC" > "$CASE_STATE/fix.rc"
+) &
+FIX_READER_PID=$!
+for _ in $(seq 1 100); do
+  [ ! -f "$CASE_STATE/fix.rc" ] || break
+  sleep 0.1
+done
+STARTED_SERVER_PID=$(cat "$CASE_STATE/herdr-server.pid" 2>/dev/null || true)
+[ -z "$STARTED_SERVER_PID" ] || HOLDER_PIDS+=("$STARTED_SERVER_PID")
+assert_present "$CASE_STATE/fix.rc" "--fix held its caller's output open for the lifetime of the herdr server it started"
+expect_code 0 "$(cat "$CASE_STATE/fix.rc")" "--fix did not start the long-lived herdr server on linux"
+assert_contains "$(cat "$CASE_STATE/fix.out")" 'fix herdr-server=applied:' "--fix did not report starting the long-lived server"
+if [ -z "$STARTED_SERVER_PID" ] || ! kill -0 "$STARTED_SERVER_PID" 2>/dev/null; then
+  fail "the herdr server --fix started did not outlive the repair"
+fi
+kill "$STARTED_SERVER_PID" 2>/dev/null || true
+wait "$FIX_READER_PID" 2>/dev/null || true
+pass "--fix returns to a piped caller at once while the herdr server it started keeps running"
 
 # --- --fix may add only owned wrappers for version-manager tools -------------
 
