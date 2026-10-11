@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Behavior tests for the opt-in per-home worker account pin
-# (config/claude-account, config/pi-account; bin/fm-worker-account-lib.sh).
+# (config/claude-account, config/codex-account, config/pi-account;
+# bin/fm-worker-account-lib.sh).
 #
 # Each case drives the real fm-spawn.sh through the shared fake tmux, which
 # records the launch command, then runs that command in a synthetic pane whose
-# ambient environment carries a different account. The fake claude and pi
-# answer the sign-in checks the way the real runners do - an environment
+# ambient environment carries a different account. The fake claude, codex, and
+# pi answer the sign-in checks the way the real runners do - an environment
 # credential counts as signed in, otherwise the selected root's stored login
 # decides - and record the account environment and arguments a launched worker
 # receives. tests/fm-worker-account-live-e2e.test.sh proves those answers
@@ -16,7 +17,7 @@ set -u
 . "$(dirname "${BASH_SOURCE[0]}")/fixtures.sh"
 
 TMP_ROOT=$(fm_test_tmproot fm-worker-account)
-unset LAVISH_AXI_HOST ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN PI_CODING_AGENT_DIR OPENAI_API_KEY
+unset LAVISH_AXI_HOST ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN PI_CODING_AGENT_DIR OPENAI_API_KEY CODEX_HOME
 
 # make_account_fakes <fakebin> <case-dir>
 # The fakes cannot read test variables during a sign-in check, which runs with
@@ -69,7 +70,25 @@ esac
   printf 'ARGS=%s\n' "\$*"
 } > '$dir/pi-worker'
 SH
-  chmod +x "$fakebin/claude" "$fakebin/pi"
+  cat > "$fakebin/codex" <<SH
+#!/usr/bin/env bash
+if [ "\${1:-}" = login ] && [ "\${2:-}" = status ]; then
+  printf '%s\n' "\${CODEX_HOME-unset}" >> '$dir/codex-checks'
+  [ -f "\${CODEX_HOME:-\$HOME/.codex}/auth.json" ]
+  exit
+fi
+{
+  printf 'CODEX_HOME=%s\n' "\${CODEX_HOME-unset}"
+  printf 'ARGS=%s\n' "\$*"
+} > '$dir/codex-worker'
+SH
+  chmod +x "$fakebin/claude" "$fakebin/pi" "$fakebin/codex"
+}
+
+# signed_in_codex_home <dir>: a Codex home holding a stored login.
+signed_in_codex_home() {
+  mkdir -p "$1"
+  printf '{}\n' > "$1/auth.json"
 }
 
 # new_case <name> <crew-harness> -> sets CASE HOME_DIR PROJ WT FAKEBIN
@@ -112,6 +131,7 @@ run_pane() {
     CLAUDE_CONFIG_DIR="$CASE/ambient-claude" ANTHROPIC_API_KEY=ambient-pane-key \
     CLAUDE_CODE_OAUTH_TOKEN=ambient-pane-token CLAUDE_CODE_USE_BEDROCK=1 \
     PI_CODING_AGENT_DIR="$CASE/ambient-pi" OPENAI_API_KEY=ambient-pane-openai \
+    CODEX_HOME="$CASE/ambient-codex" \
     bash -c "$(cat "$CASE/launch.log")" || fail "the recorded launch failed in the synthetic pane"
 }
 
@@ -384,6 +404,102 @@ test_local_secondmate_reads_the_launching_home_pin() {
   pass "a local secondmate reads the launching home's pin and its own home's file is never inherited over"
 }
 
+test_codex_absent_pin_keeps_the_hook_free_launch() {
+  local out rc id=acct-codex-absent launch
+  new_case codex-absent codex
+  out=$(spawn_ship "$id"); rc=$?
+  expect_code 0 "$rc" "an unpinned codex spawn should succeed: $out"
+  assert_not_contains "$out" "account=" "an unpinned codex spawn must not report an account"
+  assert_absent "$CASE/codex-checks" "an unpinned codex spawn must not run a sign-in check"
+  launch=$(cat "$CASE/launch.log")
+  assert_contains "$launch" "--disable hooks -c" "an unpinned codex crewmate must keep its hook layer off"
+  assert_not_contains "$launch" "CODEX_HOME" "an unpinned codex launch must not name a Codex home"
+  run_pane
+  assert_grep "CODEX_HOME=$CASE/ambient-codex" "$CASE/codex-worker" \
+    "an unpinned codex launch must keep the pane's own Codex home"
+  assert_grep "--disable hooks" "$CASE/codex-worker" "an unpinned codex worker must run hook-free"
+  pass "an absent Codex pin leaves the hook-free codex launch exactly as it was"
+}
+
+test_codex_pin_selects_the_home_and_keeps_its_hooks() {
+  local out rc id=acct-codex launch
+  new_case codex-pin codex
+  signed_in_codex_home "$CASE/fleet-codex"
+  printf '%s\n' "$CASE/fleet-codex" > "$HOME_DIR/config/codex-account"
+  out=$(spawn_ship "$id"); rc=$?
+  expect_code 0 "$rc" "a codex spawn pinned to a signed-in home should succeed: $out"
+  assert_contains "$out" "account=$CASE/fleet-codex" "the spawn should report the pinned Codex home"
+  assert_grep "account=$CASE/fleet-codex" "$HOME_DIR/state/$id.meta" "the task record should carry the pinned Codex home"
+  [ "$(cat "$CASE/codex-checks")" = "$CASE/fleet-codex" ] \
+    || fail "the sign-in check should ask about the pinned Codex home only: $(cat "$CASE/codex-checks")"
+  launch=$(cat "$CASE/launch.log")
+  assert_not_contains "$launch" "--disable hooks" "a pinned codex crewmate must keep its hook layer on"
+  assert_not_contains "$launch" "--dangerously-bypass-hook-trust" "a pinned codex crewmate must never run untrusted hooks"
+  run_pane
+  assert_grep "CODEX_HOME=$CASE/fleet-codex" "$CASE/codex-worker" "the worker should run under the pinned Codex home"
+  assert_no_grep "--disable" "$CASE/codex-worker" "the pinned worker must not disable hooks"
+  assert_grep "notify=" "$CASE/codex-worker" "the pinned worker must keep its turn-end notify program"
+  pass "a Codex pin selects its home and lets that home's trusted hooks govern the worker"
+}
+
+test_codex_pin_refusals() {
+  local out rc id=acct-codex-bad
+  new_case codex-refusals codex
+  mkdir -p "$CASE/fleet-codex"
+  signed_in_codex_home "$CASE/ambient-codex"
+  printf '%s\n' "$CASE/fleet-codex" > "$HOME_DIR/config/codex-account"
+  out=$(CODEX_HOME="$CASE/ambient-codex" spawn_ship "$id-out"); rc=$?
+  expect_code 1 "$rc" "a codex pin to a signed-out home must refuse"
+  assert_refused_before_launch "$id-out" "$out" "config/codex-account pins Codex workers to $CASE/fleet-codex, which is not signed in"
+  signed_in_codex_home "$CASE/fleet-codex"
+  signed_in_codex_home "$CASE/other-codex"
+  out=$(spawn_ship "$id-raw" --harness "FOO=1 CODEX_HOME=$CASE/other-codex codex --raw"); rc=$?
+  expect_code 1 "$rc" "a raw codex command setting CODEX_HOME must refuse under a pin"
+  assert_refused_before_launch "$id-raw" "$out" "the raw launch command sets CODEX_HOME"
+  printf '%s\n' 'relative/codex' > "$HOME_DIR/config/codex-account"
+  out=$(spawn_ship "$id-bad"); rc=$?
+  expect_code 1 "$rc" "a malformed codex pin must refuse"
+  assert_refused_before_launch "$id-bad" "$out" "config/codex-account must hold 'ordinary' or one absolute path"
+  assert_absent "$CASE/codex-worker" "a refused codex spawn must never start Codex"
+  pass "a Codex pin refuses a signed-out home, a raw CODEX_HOME override, and a malformed file"
+}
+
+test_codex_ordinary_pin_unsets_the_codex_home() {
+  local out rc id=acct-codex-ordinary
+  new_case codex-ordinary codex
+  printf 'ordinary\n' > "$HOME_DIR/config/codex-account"
+  signed_in_codex_home "$HOME_DIR/user-home/.codex"
+  out=$(CODEX_HOME="$CASE/ambient-codex" spawn_ship "$id"); rc=$?
+  expect_code 0 "$rc" "an ordinary codex pin with a default login should succeed: $out"
+  assert_contains "$out" "account=ordinary" "the spawn should report the ordinary account"
+  [ "$(cat "$CASE/codex-checks")" = unset ] \
+    || fail "the ordinary check must run with CODEX_HOME unset: $(cat "$CASE/codex-checks")"
+  run_pane
+  assert_grep "CODEX_HOME=unset" "$CASE/codex-worker" "the ordinary account must drop an ambient CODEX_HOME"
+  pass "an ordinary Codex pin selects the default Codex home and drops an ambient one"
+}
+
+test_codex_secondmate_ignores_the_codex_pin() {
+  local out rc id=acct-codex-sm sm launch
+  new_case codex-secondmate codex
+  mkdir -p "$CASE/fleet-codex"
+  printf '%s\n' "$CASE/fleet-codex" > "$HOME_DIR/config/codex-account"
+  sm="$CASE/secondmate-home"
+  mkdir -p "$sm/bin" "$sm/data" "$sm/config"
+  git init -q -b main "$sm"
+  printf '# Firstmate\n' > "$sm/AGENTS.md"
+  printf '%s\n' "$id" > "$sm/.fm-secondmate-home"
+  printf 'charter for %s\n' "$id" > "$sm/data/charter.md"
+  out=$(FM_FAKE_LAUNCH_LOG="$CASE/launch.log" fm_test_run_spawn "$HOME_DIR" "$WT" "$FAKEBIN" "$id" "$sm" --secondmate); rc=$?
+  expect_code 0 "$rc" "a codex secondmate must launch whatever the codex pin says: $out"
+  assert_not_contains "$out" "account=" "a codex secondmate must not report a codex pin"
+  assert_absent "$CASE/codex-checks" "a codex secondmate must not run the codex sign-in check"
+  launch=$(cat "$CASE/launch.log")
+  assert_contains "$launch" "codex --dangerously-bypass-approvals-and-sandbox" "the secondmate should launch on codex"
+  assert_not_contains "$launch" "CODEX_HOME" "a codex secondmate must keep the launching environment's Codex home"
+  pass "a Codex secondmate keeps its own Codex home and project hooks under a Codex pin"
+}
+
 test_absent_pin_keeps_the_launch_unchanged
 test_claude_pin_selects_the_root_and_sheds_ambient_credentials
 test_claude_pin_refuses_a_signed_out_root_despite_an_ambient_login
@@ -397,5 +513,10 @@ test_raw_claude_command_receives_the_pin
 test_raw_claude_account_override_refuses_under_a_pin
 test_raw_claude_account_override_is_kept_without_a_pin
 test_local_secondmate_reads_the_launching_home_pin
+test_codex_absent_pin_keeps_the_hook_free_launch
+test_codex_pin_selects_the_home_and_keeps_its_hooks
+test_codex_pin_refusals
+test_codex_ordinary_pin_unsets_the_codex_home
+test_codex_secondmate_ignores_the_codex_pin
 
 echo "# all fm-worker-account tests passed"

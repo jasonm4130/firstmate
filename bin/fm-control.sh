@@ -959,8 +959,10 @@ resolve_relaunch_profile() {
   # signed out must refuse here, while nothing has changed yet.
   local account_model=$TARGET_MODEL
   [ "$account_model" != default ] || account_model=
-  fm_worker_account_select "$TARGET_HARNESS" "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" \
-    "$account_model" "$TARGET_HARNESS" >/dev/null || return 1
+  if fm_worker_account_applies "$TARGET_HARNESS" "$KIND"; then
+    fm_worker_account_select "$TARGET_HARNESS" "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" \
+      "$account_model" "$TARGET_HARNESS" >/dev/null || return 1
+  fi
   # Likewise config/crew-exclude-tools: a malformed file, or a replacement
   # runtime that cannot hide the listed tools, refuses here, before the old
   # agent stops. Secondmate agents are not covered.

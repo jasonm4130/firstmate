@@ -361,16 +361,18 @@
 #   docs/configuration.md "Worker tool exclusions" owns config/crew-exclude-tools
 #   and its operator contract. Resolve it with bin/fm-exclude-tools-lib.sh
 #   before provisioning; __PIEXCLUDE__ below owns the Pi launch substitution.
-# Worker account pin (config/claude-account, config/pi-account):
-#   Opt-in. With no file, a Claude or Pi launch is unchanged: Claude still
-#   receives this process's own CLAUDE_CONFIG_DIR when it is set, and Pi the
-#   destination pane's ambient account. A present file pins every launch of
-#   that runner from this home - ship, scout, local secondmate, raw Claude
-#   command, and relaunch - to the declared account root, and the spawn
-#   refuses before any endpoint, worktree, or record exists when the file is
-#   malformed, the root is unusable, or the runner's own check says it is not
-#   signed in. A pinned Claude launch sheds the environment credentials Claude
-#   ranks above the root's login; a pinned Pi launch needs --model
+# Worker account pin (config/claude-account, config/codex-account, config/pi-account):
+#   Opt-in. With no file, a Claude, Codex, or Pi launch is unchanged: Claude
+#   still receives this process's own CLAUDE_CONFIG_DIR when it is set, and
+#   Codex and Pi the destination pane's ambient account. A present file pins
+#   every launch of that runner from this home - ship, scout, local secondmate
+#   (never a Codex one), raw Claude or Codex command, and relaunch - to the
+#   declared account root, and the spawn refuses before any endpoint,
+#   worktree, or record exists when the file is malformed, the root is
+#   unusable, or the runner's own check says it is not signed in. A pinned
+#   Claude launch sheds the environment credentials Claude ranks above the
+#   root's login; a pinned Codex crewmate or scout launches with its hook
+#   layer on (__CODEXHOOKSFLAG__ below); a pinned Pi launch needs --model
 #   <provider>/<id> for a declared provider and also carries --provider, and a
 #   raw Pi command refuses. The pin is recorded as account= (and Pi's
 #   account_provider=) in the task record and on the spawned line. A local
@@ -379,6 +381,9 @@
 #   Launch templates live in launch_template() below; placeholders replaced before launch:
 #     __BRIEF__    absolute path to data/<task-id>/brief.md
 #     __CLAUDEPERMFLAG__ the claude permission flag selected by config/claude-permission-mode
+#     __CODEXHOOKSFLAG__ `--disable hooks ` on a codex ship or scout launch, or
+#                  empty when config/codex-account pins it (launch_template below
+#                  owns why; supplies its own trailing space)
 #     __CLAUDEADDDIRS__ quoted --add-dir flags granting exactly this task's
 #                  Firstmate channel directories (claude_add_dirs_flag below;
 #                  supplies its own trailing space, empty never used)
@@ -2148,6 +2153,11 @@ launch_template() {
   # ~/.codex untouched. An unknown feature name is a hard codex error, so a future
   # release that drops this flag fails the launch loudly instead of silently
   # restoring the modal.
+  # A home's config/codex-account pin is the exception: it names a Codex home the
+  # operator prepared for workers, whose hooks are already trusted there, so the
+  # pinned crewmate keeps its hook layer on and that home's guard governs it
+  # (__CODEXHOOKSFLAG__ is empty). The trust modal still applies there, so every
+  # hook a pinned launch loads must already be trusted in the pinned home.
   # A secondmate is a firstmate PRIMARY in its own home, and its turn-end guard,
   # session-start digest, and cd/arm seatbelts are exactly those project hooks
   # (docs/turnend-guard.md, docs/sessionstart-nudge.md, docs/cd-guard.md), so the
@@ -2156,7 +2166,7 @@ launch_template() {
     if [ "$kind" = secondmate ]; then
       printf '%s' 'codex __MODELFLAG____EFFORTFLAG__--dangerously-bypass-approvals-and-sandbox "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
     else
-      printf '%s' 'codex __MODELFLAG____EFFORTFLAG__--dangerously-bypass-approvals-and-sandbox --disable hooks -c "notify=[\"bash\",\"-c\",\"touch __TURNEND__\"]" "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
+      printf '%s' 'codex __MODELFLAG____EFFORTFLAG__--dangerously-bypass-approvals-and-sandbox __CODEXHOOKSFLAG__-c "notify=[\"bash\",\"-c\",\"touch __TURNEND__\"]" "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
     fi
     ;;
   opencode) printf '%s' 'OPENCODE_CONFIG_CONTENT='\''{"permission":{"*":"allow"}__EFFORTFLAG__}'\'' opencode __MODELFLAG__--prompt "$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
@@ -2524,7 +2534,10 @@ fi
 # trust registration below writes the store the worker will actually read.
 RAW_COMMAND=
 [ "$RAW_LAUNCH" = 0 ] || RAW_COMMAND=$ARG3
-WORKER_ACCOUNT=$(fm_worker_account_select "$HARNESS" "$CONFIG" "$MODEL" "${PI_BIN:-$HARNESS}" "$RAW_COMMAND") || exit 1
+WORKER_ACCOUNT=
+if fm_worker_account_applies "$HARNESS" "$KIND"; then
+  WORKER_ACCOUNT=$(fm_worker_account_select "$HARNESS" "$CONFIG" "$MODEL" "${PI_BIN:-$HARNESS}" "$RAW_COMMAND") || exit 1
+fi
 WORKER_ACCOUNT_DECLARED=${WORKER_ACCOUNT%%$'\t'*}
 WORKER_ACCOUNT_ROOT=${WORKER_ACCOUNT#*$'\t'}
 WORKER_ACCOUNT_PROVIDER=${WORKER_ACCOUNT_ROOT#*$'\t'}
@@ -5359,6 +5372,11 @@ if [ "$RELAUNCH" -eq 1 ]; then
 fi
 LAUNCH=${LAUNCH//__PIRESUME__/$RESUME_ARGS}
 LAUNCH=${LAUNCH//__CLAUDEPERMFLAG__/$CLAUDE_PERM_FLAG}
+if [ -n "$WORKER_ACCOUNT" ]; then
+  LAUNCH=${LAUNCH//__CODEXHOOKSFLAG__/}
+else
+  LAUNCH=${LAUNCH//__CODEXHOOKSFLAG__/--disable hooks }
+fi
 case "$LAUNCH" in
 *__CLAUDESETTINGS__*)
   if [ "$KIND" = secondmate ]; then
@@ -5447,6 +5465,13 @@ if [ -n "$WORKER_ACCOUNT" ]; then
       LAUNCH="$(fm_worker_account_claude_shed) CLAUDE_CONFIG_DIR=$(shell_quote "$WORKER_ACCOUNT_ROOT") $LAUNCH"
     else
       LAUNCH="$(fm_worker_account_claude_shed) -u CLAUDE_CONFIG_DIR $LAUNCH"
+    fi
+    ;;
+  codex)
+    if [ -n "$WORKER_ACCOUNT_ROOT" ]; then
+      LAUNCH="CODEX_HOME=$(shell_quote "$WORKER_ACCOUNT_ROOT") $LAUNCH"
+    else
+      LAUNCH="env -u CODEX_HOME $LAUNCH"
     fi
     ;;
   pi | pi-signed)

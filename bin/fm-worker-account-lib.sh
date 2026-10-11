@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # fm-worker-account-lib.sh - the single owner of the opt-in per-home worker
 # account pin: which runners can be pinned, how a pin file is parsed and
-# resolved, the launch-time sign-in check under it, and the environment
-# credentials a pinned Claude launch sheds.
+# resolved, which launches it governs, the launch-time sign-in check under
+# it, and the environment credentials a pinned Claude launch sheds.
 #
 # docs/configuration.md "Worker account pin" owns the operator-facing contract.
 # Sourced by bin/fm-spawn.sh and bin/fm-control.sh.
@@ -10,7 +10,15 @@
 # Pinnable runners, each a credential store inside a root its vendor lets a
 # process select:
 #   claude          CLAUDE_CONFIG_DIR     config/claude-account
+#   codex           CODEX_HOME            config/codex-account
 #   pi, pi-signed   PI_CODING_AGENT_DIR   config/pi-account
+#
+# A Codex pin governs ship and scout launches only. A Codex secondmate is a
+# firstmate primary whose supervision runs on project hooks trusted in the
+# launching environment's own Codex home, so it keeps that home. A pinned
+# Codex crewmate runs with its hook layer on, so the pinned home's trusted
+# hooks, such as an unattended-session guard, govern it; bin/fm-spawn.sh owns
+# that launch difference.
 #
 # The pin is opt-in: an absent file is no pin, and the launch keeps today's
 # ambient behavior byte for byte. A present file must resolve, or the launch
@@ -18,8 +26,9 @@
 # home has declared one. `ordinary` selects the vendor default: for Claude
 # that is CLAUDE_CONFIG_DIR unset, because Claude reads $CLAUDE_CONFIG_DIR/
 # .claude.json and keys its macOS Keychain entry to any CLAUDE_CONFIG_DIR that
-# is set, even $HOME/.claude; for Pi it is $HOME/.pi/agent. Any other value is
-# one absolute path to an existing readable, searchable directory. Firstmate
+# is set, even $HOME/.claude; for Codex it is CODEX_HOME unset, so Codex uses
+# $HOME/.codex; for Pi it is $HOME/.pi/agent. Any other value is one
+# absolute path to an existing readable, searchable directory. Firstmate
 # never copies credentials or changes a global login.
 #
 # A Pi root can hold several provider identities, so config/pi-account names
@@ -33,12 +42,15 @@
 # with config/pi-account refuses raw Pi launches. A raw Claude launch command
 # runs after the pinned root and shed credentials are applied, so its own
 # leading CLAUDE_CONFIG_DIR or shed-credential assignment would override the
-# pin; a home with config/claude-account refuses such a command.
+# pin; a home with config/claude-account refuses such a command. A raw Codex
+# launch command likewise refuses under config/codex-account when its leading
+# assignments set CODEX_HOME.
 #
 # The sign-in check asks the runner itself, with only HOME, PATH, TMPDIR,
 # USER, LOGNAME, and the selected root in its environment, so a credential
 # variable left in the caller cannot answer for a root that has no login:
 #   Claude: `claude auth status`, which exits 0 only when signed in.
+#   Codex:  `codex login status`, which exits 0 only when signed in.
 #   Pi:     `pi auth check --provider <p> --json --no-refresh`; status "ready"
 #           passes. `pi auth check` loads no extensions, so it answers
 #           not_ready/provider_not_found for an extension-registered provider,
@@ -51,7 +63,8 @@
 # above the root's stored login, so an ambient API key or token cannot outrank
 # the pin. Pi ranks a root's stored credentials above environment variables,
 # and the check refuses a provider the root has not stored, so a pinned Pi
-# launch unsets nothing.
+# launch unsets nothing. A pinned Codex launch sets CODEX_HOME and unsets
+# nothing else.
 
 # shellcheck source=bin/fm-timeout-lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-timeout-lib.sh"
@@ -69,15 +82,25 @@ FM_WORKER_ACCOUNT_CLAUDE_SHED="CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_VERTEX CL
 fm_worker_account_file() {
   case "$1" in
   claude) printf '%s\n' claude-account ;;
+  codex) printf '%s\n' codex-account ;;
   pi | pi-signed) printf '%s\n' pi-account ;;
   *) return 1 ;;
   esac
 }
 
+# fm_worker_account_applies <harness> <kind>
+# Returns 0 when a pin for this runner governs a launch of this task kind, and
+# 1 when the launch keeps today's behavior whatever the home declares: a Codex
+# secondmate keeps the launching environment's Codex home.
+fm_worker_account_applies() {
+  [ "$1" != codex ] || [ "$2" != secondmate ]
+}
+
 # fm_worker_account_read <harness> <file>
 # Prints "declared<TAB>providers" for a valid pin, where declared is
-# `ordinary` or the absolute path and providers is empty for Claude. The final
-# newline is optional; any other control byte, including a CR, is malformed.
+# `ordinary` or the absolute path and providers is empty for Claude and
+# Codex. The final newline is optional; any other control byte, including a
+# CR, is malformed.
 # Parses bytes before the shell can drop NULs or trailing newlines; paths are
 # literal, never shell expressions. Returns 0 on success, 3 when the file does
 # not exist, 4 when it cannot be inspected (one error already printed), 5 when
@@ -93,7 +116,7 @@ fm_worker_account_read() {
     (-f $f && -r _) or exit 5;
     open(my $fh, "<", $f) or exit 5;
     my $body = do { local $/; <$fh> } // "";
-    if ($harness eq "claude") {
+    if ($harness eq "claude" || $harness eq "codex") {
       $body =~ /\A(ordinary|\/[^\x00-\x1f\x7f]*)\n?\z/ or exit 6;
       print $1, "\t";
     } else {
@@ -105,9 +128,9 @@ fm_worker_account_read() {
 
 # fm_worker_account_resolve <harness> <config-dir>
 # Prints "declared<TAB>root<TAB>providers" for a valid pin, where root is the
-# directory the launch selects (empty for ordinary Claude, meaning
-# CLAUDE_CONFIG_DIR unset). Prints nothing and returns 0 when the runner is
-# not pinnable or the home has no pin. On refusal prints one error naming the
+# directory the launch selects (empty for ordinary Claude or Codex, meaning
+# CLAUDE_CONFIG_DIR or CODEX_HOME unset). Prints nothing and returns 0 when
+# the runner is not pinnable or the home has no pin. On refusal prints one error naming the
 # file and returns 1.
 fm_worker_account_resolve() {
   local harness=$1 config=$2 file cfg token rc declared root fallback
@@ -137,11 +160,12 @@ fm_worker_account_resolve() {
   # shellcheck disable=SC2088  # The fallbacks are literal text for the refusal.
   case "$harness" in
   claude) fallback='~/.claude with CLAUDE_CONFIG_DIR unset' ;;
+  codex) fallback='~/.codex with CODEX_HOME unset' ;;
   *) fallback='~/.pi/agent' ;;
   esac
   if [ "$declared" = ordinary ]; then
     case "$harness" in
-    claude) root= ;;
+    claude | codex) root= ;;
     *) root="${HOME:?HOME is required to resolve an ordinary Pi account}/.pi/agent" ;;
     esac
   fi
@@ -189,6 +213,19 @@ fm_worker_account_check() {
     fi
     return 1
     ;;
+  codex)
+    [ -z "$root" ] || clean+=("CODEX_HOME=$root")
+    if fm_run_timed "$FM_WORKER_ACCOUNT_CHECK_SECONDS" "${clean[@]}" \
+      "$executable" login status >/dev/null 2>&1 </dev/null; then
+      return 0
+    fi
+    if [ -n "$root" ]; then
+      echo "error: config/codex-account pins Codex workers to $root, which is not signed in (codex login status); sign in with CODEX_HOME=$root codex login, or change the pin" >&2
+    else
+      echo "error: config/codex-account pins Codex workers to the ordinary account, which is not signed in (codex login status); sign in with env -u CODEX_HOME codex login, or change the pin" >&2
+    fi
+    return 1
+    ;;
   pi | pi-signed)
     clean+=("PI_CODING_AGENT_DIR=$root")
     out=$(fm_run_timed "$FM_WORKER_ACCOUNT_CHECK_SECONDS" "${clean[@]}" \
@@ -221,25 +258,31 @@ fm_worker_account_check() {
 # The whole launch-time decision. Prints nothing for an unpinned runner, so
 # the caller keeps today's launch unchanged. For a pinned one prints
 # "declared<TAB>root<TAB>provider", where provider is the Pi launch model's
-# own (empty for Claude), after the model guard and the sign-in check pass. On
+# own (empty for Claude and Codex), after the model guard and the sign-in
+# check pass. On
 # refusal prints one error and returns 1. bin/fm-spawn.sh runs it before any
 # endpoint exists, and bin/fm-control.sh before a relaunch stops the live
 # agent.
 fm_worker_account_select() {
-  local harness=$1 config=$2 model=$3 executable=$4 raw=${5:-} selection declared root providers word provider=
+  local harness=$1 config=$2 model=$3 executable=$4 raw=${5:-} selection declared root providers word overrides runner provider=
   selection=$(fm_worker_account_resolve "$harness" "$config") || return 1
   [ -n "$selection" ] || return 0
   declared=${selection%%$'\t'*}
   root=${selection#*$'\t'}
   providers=${root#*$'\t'}
   root=${root%%$'\t'*}
-  if [ "$harness" = claude ]; then
+  if [ "$harness" = claude ] || [ "$harness" = codex ]; then
+    if [ "$harness" = claude ]; then
+      runner=Claude overrides="CLAUDE_CONFIG_DIR $FM_WORKER_ACCOUNT_CLAUDE_SHED"
+    else
+      runner=Codex overrides=CODEX_HOME
+    fi
     for word in $raw; do
       case "$word" in
       [A-Za-z_]*=*)
-        case " CLAUDE_CONFIG_DIR $FM_WORKER_ACCOUNT_CLAUDE_SHED " in
+        case " $overrides " in
         *" ${word%%=*} "*)
-          echo "error: config/claude-account pins Claude workers, but the raw launch command sets ${word%%=*}, which would override the pinned account; remove ${word%%=*} from the raw command, or change or remove config/claude-account" >&2
+          echo "error: config/$harness-account pins $runner workers, but the raw launch command sets ${word%%=*}, which would override the pinned account; remove ${word%%=*} from the raw command, or change or remove config/$harness-account" >&2
           return 1
           ;;
         esac
