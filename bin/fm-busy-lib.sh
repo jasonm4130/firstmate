@@ -992,6 +992,94 @@ fm_busy_gemini_launch_prompt_tail() {
   printf '%s' "$buf" | grep -qiE "${FM_BUSY_GEMINI_APIKEY_PROMPT_REGEX:-Enter Gemini API Key}"
 }
 
+# fm_busy_claude_permission_prompt_command: Claude's tool-permission dialog,
+# the mid-turn prompt a worker sits on when a command matches no allow rule
+# (for example a `git push` prompt left unanswered for over five hours
+# while the semantic record still read busy). Shape read from the Claude Code
+# 2.1.285 permission components: a horizontal rule, the dialog title ("Bash
+# command", "Edit file", ...), the indented pending command or file, a dim
+# description, a "Do you want to proceed?" question (the file dialogs ask "Do
+# you want to <verb> ...?"), then a numbered option list opening with "1. Yes"
+# and carrying a "No" option, and an "Esc to cancel" footer. Older releases
+# drew the same text inside a rounded box, whose side borders are stripped.
+# Consumes a captured tail on stdin; on a match prints a redacted name for the
+# pending command and returns 0. The command's arguments can carry a
+# credential (an Authorization header, a signed URL, an inline VAR=value), and
+# the printed name reaches durable fleet state and published summaries, so only
+# the program name is kept, and only when it is a plain word (a letter
+# followed by letters, digits, dot, underscore, or dash), with " ..." marking
+# dropped arguments; any argument, even a plain word, can be a credential.
+# With no such program name, the dialog title ("Bash command", "Edit file",
+# ...) is printed instead. Only the LAST question counts and
+# only while the dialog is still the bottom of the pane: an option list must
+# follow it, at most 12 non-blank lines may follow it, and no horizontal rule
+# may follow it, because the idle composer always draws its own rules below
+# any output - so a dialog merely quoted in scrollback never matches.
+fm_busy_claude_permission_prompt_command() {
+  awk '
+    function norm(s) {
+      sub(/^[ \t]*(│|┃|\|)[ \t]?/, "", s)
+      sub(/[ \t]*(│|┃|\|)[ \t]*$/, "", s)
+      gsub(/\t/, " ", s)
+      sub(/^ +/, "", s)
+      sub(/ +$/, "", s)
+      return s
+    }
+    function is_rule(s) {
+      return s ~ /^(╭|╰)?(─|━|-)(─|━|-)(─|━|-)+(╮|╯)?$/
+    }
+    { line[NR] = norm($0) }
+    END {
+      q = 0
+      for (i = NR; i >= 1; i--) if (line[i] ~ /^Do you want to [^?]*\?$/) { q = i; break }
+      if (!q) exit 1
+      yes = 0; no = 0; after = 0
+      for (i = q + 1; i <= NR; i++) {
+        if (line[i] == "") continue
+        after++
+        if (is_rule(line[i])) exit 1
+        if (line[i] ~ /^(❯|>)? *1\. +Yes/) yes = 1
+        if (yes && line[i] ~ /^(❯|>)? *[0-9]+\. +No([^A-Za-z]|$)/) no = 1
+      }
+      if (!yes || !no || after > 12) exit 1
+      r = 0
+      for (i = q - 1; i >= 1; i--) if (is_rule(line[i])) { r = i; break }
+      title = ""; cmd = ""
+      if (r) {
+        for (i = r + 1; i < q; i++) {
+          if (line[i] == "") continue
+          if (title == "") { title = line[i]; continue }
+          cmd = line[i]; break
+        }
+      }
+      if (cmd == "") cmd = title
+      n = split(cmd, word, " ")
+      name = ""
+      if (n >= 1 && word[1] ~ /^[A-Za-z][A-Za-z0-9._-]*$/) name = word[1]
+      if (name != "" && n > 1) name = name " ..."
+      if (name == "" && cmd != title) name = title
+      if (name == "") name = "command not visible in capture"
+      if (length(name) > 120) name = substr(name, 1, 117) "..."
+      print name
+    }
+  '
+}
+
+# fm_busy_permission_prompt_pending: whether <target>'s pane shows a pending
+# tool-permission dialog, printing the pending command on a match. Only Claude
+# has a verified signature; every other harness fails before any capture, so
+# its reads are unchanged. A failed capture is no match.
+fm_busy_permission_prompt_pending() {  # <backend> <target> <harness> [expected-label]
+  local tail60
+  case "${3:-}" in
+    claude*) ;;
+    *) return 1 ;;
+  esac
+  tail60=$(fm_backend_capture "$1" "$2" 60 "${4:-}" 2>/dev/null) || return 1
+  [ -n "$tail60" ] || return 1
+  printf '%s\n' "$tail60" | fm_busy_claude_permission_prompt_command
+}
+
 # fm_busy_launch_prompt_parked: dispatch to the signature above for <harness>,
 # or fail when this harness has none. Consumes the tail on stdin. Scoped to
 # exactly the harnesses fm-spawn.sh arms with the fm-spawn busy source

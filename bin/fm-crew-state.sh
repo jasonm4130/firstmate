@@ -35,6 +35,9 @@
 #      to the routed status log; dead/missing report the remote verdict; an
 #      unreachable or unreadable remote reports unknown-remote, never a false
 #      gone/dead.
+#   1b. A pending tool-permission dialog in a local pane (Claude only, signature
+#      owned by bin/fm-busy-lib.sh) reports blocked · pane with the pending
+#      command, ahead of every run-step or busy read below.
 #   2. Matching no-mistakes run for this crew's branch AND current code identity,
 #      active or terminal (from `axi status`, or the coarse `no-mistakes runs`
 #      fallback)? Branch name alone is not enough: a historical run on a reused
@@ -339,6 +342,18 @@ crew_busy_verdict() {  # <target>
   tail40=$(fm_backend_capture "$TASK_BACKEND" "$1" 40 "$EXPECTED_LABEL" 2>/dev/null) || tail40=''
   fm_busy_classify "$TASK_BACKEND" "$1" "$HARNESS" "$ID" "$STATE" "$tail40"
 }
+
+# A pending tool-permission dialog outranks every other source, including an
+# attributed run-step: the worker cannot act until a human answers it, while
+# the run record (terminal, parked, or unknown) and the semantic busy record
+# (still busy from the open turn) both keep reading as if the worker were fine.
+# That is how a worker can sit on a `git push` prompt for hours unnoticed.
+# bin/fm-busy-lib.sh owns the per-harness dialog signature; a
+# harness without one, or a failed capture, reads nothing here.
+if [ -n "$BACKEND_TARGET" ] \
+  && PERMISSION_CMD=$(fm_busy_permission_prompt_pending "$TASK_BACKEND" "$BACKEND_TARGET" "$HARNESS" "$EXPECTED_LABEL"); then
+  emit blocked pane "permission dialog pending: $PERMISSION_CMD"
+fi
 
 # --- no-mistakes run lookup (authoritative when a run matches this branch) --
 # trim, strip_quotes, the bounded nm_run call, nm_field's TOON parse, and the

@@ -2502,6 +2502,157 @@ Enter to confirm . Esc to cancel'
   pass "a launch parked on a recognized interactive prompt never reads working, closing the absorb path a stale watcher poll depends on"
 }
 
+# A Claude tool-permission dialog in the shape Claude Code 2.1.285 renders it
+# (bin/fm-busy-lib.sh fm_busy_claude_permission_prompt_command owns the
+# signature). A worker can sit on this `git push` prompt for hours
+# while its state reads as if nothing were wrong.
+claude_permission_dialog_text() {
+  cat <<'TXT'
+● Bash(git push -u origin fm/example)
+  ⎿  Running…
+
+────────────────────────────────────────────────────────────────────────────────
+ Bash command
+
+   git push -u origin fm/example
+   Push the branch to origin
+
+ Permission rule Bash(git push origin:*) requires confirmation for this command.
+
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. Yes, and don't ask again for git push commands in /home/u/wt
+   3. No
+
+ Esc to cancel · Tab to amend
+TXT
+}
+
+arm_busy_record() {  # <state-dir> <id>
+  local gen
+  gen=$("$ROOT/bin/fm-busy-event.sh" arm "$1" "$2")
+  "$ROOT/bin/fm-busy-event.sh" apply "$1" "$2" busy --gen "$gen" \
+    --source claude-hook --event user-prompt-submit
+}
+
+# The open turn keeps the semantic record busy, so without the dialog read this
+# crew reports working and the watcher absorbs every stale wake.
+test_no_run_permission_dialog_reads_blocked_with_command() {
+  reset_fakes
+  local d; d=$(new_case perm-dialog)
+  make_repo_on_branch "$d/wt" fm/feat-pd
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-pd.meta" "window=fm:fm-feat-pd" "worktree=$d/wt" "kind=ship" "harness=claude"
+  FM_FAKE_BUSY=1
+  FM_FAKE_BUSY_TEXT=$(claude_permission_dialog_text)
+  export FM_FAKE_BUSY_TEXT
+  arm_busy_record "$d/state" feat-pd
+  local out; out=$(run_crew_state "$d" feat-pd)
+  assert_contains "$out" "state: blocked" "a pending permission dialog reads blocked"
+  assert_contains "$out" "source: pane" "the blocked verdict comes from the pane"
+  assert_contains "$out" "permission dialog pending: git ..." "the reason names the pending program"
+  assert_not_contains "$out" "Push the branch" "only the command's first line is reported"
+  pass "a Claude permission dialog reads blocked and names the pending command"
+}
+
+# The dialog outranks an attributed run: the run record keeps reading working
+# (or terminal) while the worker cannot move.
+test_permission_dialog_outranks_active_run() {
+  reset_fakes
+  local d; d=$(new_case perm-dialog-run)
+  make_repo_on_branch "$d/wt" fm/feat-pr
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-pr.meta" "window=fm:fm-feat-pr" "worktree=$d/wt" "kind=ship" "harness=claude"
+  FM_FAKE_AXI_STATUS="$(run_running fm/feat-pr)"
+  FM_FAKE_BUSY=1
+  FM_FAKE_BUSY_TEXT=$(claude_permission_dialog_text)
+  export FM_FAKE_BUSY_TEXT
+  local out; out=$(run_crew_state "$d" feat-pr)
+  assert_contains "$out" "state: blocked" "a pending permission dialog outranks the run-step"
+  assert_contains "$out" "permission dialog pending: git ..." "the reason names the pending program"
+  pass "a pending permission dialog outranks an attributed run"
+}
+
+# The reported name reaches durable fleet state and published summaries, so a
+# credential in the pending command's arguments never appears in it.
+test_permission_dialog_redacts_command_arguments() {
+  reset_fakes
+  local d; d=$(new_case perm-dialog-redact)
+  make_repo_on_branch "$d/wt" fm/feat-px
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-px.meta" "window=fm:fm-feat-px" "worktree=$d/wt" "kind=ship" "harness=claude"
+  FM_FAKE_BUSY=1
+  FM_FAKE_BUSY_TEXT=$(claude_permission_dialog_text | sed 's|^   git push -u origin fm/example$|   curl -H "Authorization: Bearer fake-cred-111" https://example.test/api|')  # gitleaks:allow (fake fixture credential)
+  export FM_FAKE_BUSY_TEXT
+  arm_busy_record "$d/state" feat-px
+  local out; out=$(run_crew_state "$d" feat-px)
+  assert_contains "$out" "state: blocked" "a dialog with a credential still reads blocked"
+  assert_contains "$out" "permission dialog pending: curl ..." "only the program name is reported"
+  assert_not_contains "$out" "fake-cred-111" "a header credential is never reported"
+  assert_not_contains "$out" "example.test" "the URL argument is never reported"
+
+  FM_FAKE_BUSY_TEXT=$(claude_permission_dialog_text | sed 's|^   git push -u origin fm/example$|   API_TOKEN=fake-cred-222 ./deploy.sh|')
+  export FM_FAKE_BUSY_TEXT
+  out=$(run_crew_state "$d" feat-px)
+  assert_contains "$out" "permission dialog pending: Bash command" "a command with no plain leading word falls back to the dialog title"
+  assert_not_contains "$out" "fake-cred-222" "an inline VAR=value credential is never reported"
+
+  FM_FAKE_BUSY_TEXT=$(claude_permission_dialog_text | sed 's|^   git push -u origin fm/example$|   login fakecred333 --quiet|')
+  export FM_FAKE_BUSY_TEXT
+  out=$(run_crew_state "$d" feat-px)
+  assert_contains "$out" "permission dialog pending: login ..." "a plain-word argument is dropped like any other"
+  assert_not_contains "$out" "fakecred333" "a plain-word credential argument is never reported"
+  pass "a pending permission dialog reports a redacted command name, never its arguments"
+}
+
+# Ordinary output, and a dialog that is only quoted in scrollback above the
+# idle composer's rules, never read blocked.
+test_ordinary_pane_is_not_a_permission_dialog() {
+  reset_fakes
+  local d; d=$(new_case perm-dialog-none)
+  make_repo_on_branch "$d/wt" fm/feat-pn
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-pn.meta" "window=fm:fm-feat-pn" "worktree=$d/wt" "kind=ship" "harness=claude"
+  FM_FAKE_BUSY=1
+  FM_FAKE_BUSY_TEXT='● Bash(bash tests/fm-crew-state.test.sh)
+  ⎿  all fm-crew-state tests passed
+esc to interrupt'
+  export FM_FAKE_BUSY_TEXT
+  arm_busy_record "$d/state" feat-pn
+  local out; out=$(run_crew_state "$d" feat-pn)
+  assert_contains "$out" "state: working" "ordinary output keeps the busy verdict"
+  assert_not_contains "$out" "permission dialog" "ordinary output is not a permission dialog"
+
+  FM_FAKE_BUSY_TEXT="$(claude_permission_dialog_text)
+● The dialog above was only quoted.
+────────────────────────────────────────
+❯ 
+────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle)"
+  export FM_FAKE_BUSY_TEXT
+  out=$(run_crew_state "$d" feat-pn)
+  assert_contains "$out" "state: working" "a dialog quoted above the idle composer is not pending"
+  assert_not_contains "$out" "permission dialog" "a quoted dialog is not reported"
+  pass "ordinary pane output and a quoted dialog never read as a pending permission dialog"
+}
+
+# Other harnesses have no dialog signature and keep their existing reads.
+test_permission_dialog_text_leaves_other_harnesses_unchanged() {
+  reset_fakes
+  local d; d=$(new_case perm-dialog-grok)
+  make_repo_on_branch "$d/wt" fm/feat-pg
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-pg.meta" "window=fm:fm-feat-pg" "worktree=$d/wt" "kind=ship" "harness=grok"
+  FM_FAKE_BUSY=1
+  FM_FAKE_BUSY_TEXT="$(claude_permission_dialog_text)
+Ctrl+c:cancel"
+  export FM_FAKE_BUSY_TEXT
+  local out; out=$(run_crew_state "$d" feat-pg)
+  assert_contains "$out" "state: working" "a grok crew keeps its own busy read"
+  assert_not_contains "$out" "permission dialog" "a non-Claude harness never reads the Claude dialog"
+  pass "a Claude-shaped dialog leaves other harnesses unchanged"
+}
+
 # A converted adapter must NOT read working from rendered footer text: the
 # redesign removed that dependency, so a pane painting "esc to interrupt" with
 # no semantic record is unknown, never working and never silently idle.
@@ -5580,6 +5731,11 @@ test_no_mistakes_prevalidation_done_stays_done
 test_moved_remote_branch_without_named_head_is_blocked
 test_no_run_busy_pane
 test_no_run_launch_prompt_parked_is_not_working
+test_no_run_permission_dialog_reads_blocked_with_command
+test_permission_dialog_outranks_active_run
+test_permission_dialog_redacts_command_arguments
+test_ordinary_pane_is_not_a_permission_dialog
+test_permission_dialog_text_leaves_other_harnesses_unchanged
 test_no_run_footer_text_alone_is_not_working
 test_no_run_grok_uses_isolated_fallback
 test_no_run_herdr_unknown_uses_backend_capture
