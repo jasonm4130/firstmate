@@ -240,7 +240,7 @@ foreign_stall_watch_leg() {  # <dir> <leg> <now> [observation]
   marker="$dir/state/.secondmate-wake-progress-mate"
   stall="$dir/state/.secondmate-wake-stall-mate"
   printf '%s\n' "$now" > "$dir/now"
-  PATH="$dir/fakebin:$PATH" FM_FAKE_NOW_FILE="$dir/now" FM_HOME="$dir" FM_ROOT_OVERRIDE="$ROOT" \
+  PATH="$dir/fakebin:$PATH" FM_TEST_SEAM=1 FM_TEST_EPOCH_SECONDS_FILE="$dir/now" FM_FAKE_NOW_FILE="$dir/now" FM_HOME="$dir" FM_ROOT_OVERRIDE="$ROOT" \
     FM_STATE_OVERRIDE="$dir/state" FM_FAKE_TMUX_WINDOW='firstmate:fm-mate' \
     FM_SECONDMATE_WAKE_STALL_SECS=1 FM_SECONDMATE_LIVENESS_SECS=99999999 \
     FM_POLL=1 FM_SIGNAL_GRACE=0 \
@@ -595,13 +595,13 @@ SH
 100	8	stale	fleet:w2:p3	stale: fleet:w2:p3 (paused 3615s, awaiting external - declared pause, rechecked on a long cadence not a wedge)
 EOF
   printf '1000\n' > "$dir/now"
-  PATH="$fakebin:$PATH" FM_FAKE_NOW_FILE="$dir/now" FM_HOME="$dir" FM_ROOT_OVERRIDE="$ROOT" \
+  PATH="$fakebin:$PATH" FM_TEST_SEAM=1 FM_TEST_EPOCH_SECONDS_FILE="$dir/now" FM_FAKE_NOW_FILE="$dir/now" FM_HOME="$dir" FM_ROOT_OVERRIDE="$ROOT" \
     FM_STATE_OVERRIDE="$state" FM_FAKE_TMUX_WINDOW='firstmate:fm-mate' \
     FM_SECONDMATE_WAKE_STALL_SECS=1 FM_POLL=1 FM_SIGNAL_GRACE=0 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
     secondmate_stall_watch_leg "$dir" "first" cleared
   printf '5000\n' > "$dir/now"
-  PATH="$fakebin:$PATH" FM_FAKE_NOW_FILE="$dir/now" FM_HOME="$dir" FM_ROOT_OVERRIDE="$ROOT" \
+  PATH="$fakebin:$PATH" FM_TEST_SEAM=1 FM_TEST_EPOCH_SECONDS_FILE="$dir/now" FM_FAKE_NOW_FILE="$dir/now" FM_HOME="$dir" FM_ROOT_OVERRIDE="$ROOT" \
     FM_STATE_OVERRIDE="$state" FM_FAKE_TMUX_WINDOW='firstmate:fm-mate' \
     FM_SECONDMATE_WAKE_STALL_SECS=1 FM_POLL=1 FM_SIGNAL_GRACE=0 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
@@ -643,7 +643,7 @@ SH
   # The retired generation's last observation records sequence 9.
   printf '1000\n' > "$dir/now"
   printf '100\t9\tcheck\told\tcheck: retired generation row\n' > "$sub/state/.wake-queue"
-  PATH="$fakebin:$PATH" FM_FAKE_NOW_FILE="$dir/now" FM_HOME="$dir" FM_ROOT_OVERRIDE="$ROOT" \
+  PATH="$fakebin:$PATH" FM_TEST_SEAM=1 FM_TEST_EPOCH_SECONDS_FILE="$dir/now" FM_FAKE_NOW_FILE="$dir/now" FM_HOME="$dir" FM_ROOT_OVERRIDE="$ROOT" \
     FM_STATE_OVERRIDE="$state" FM_FAKE_TMUX_WINDOW='firstmate:fm-mate' \
     FM_SECONDMATE_WAKE_STALL_SECS=1 FM_POLL=1 FM_SIGNAL_GRACE=0 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
@@ -655,7 +655,7 @@ SH
   # inherit the old generation's idle interval.
   printf '1010\n' > "$dir/now"
   printf '200\t9\tcheck\tregen\tcheck: reprovisioned row\n' > "$sub/state/.wake-queue"
-  PATH="$fakebin:$PATH" FM_FAKE_NOW_FILE="$dir/now" FM_HOME="$dir" FM_ROOT_OVERRIDE="$ROOT" \
+  PATH="$fakebin:$PATH" FM_TEST_SEAM=1 FM_TEST_EPOCH_SECONDS_FILE="$dir/now" FM_FAKE_NOW_FILE="$dir/now" FM_HOME="$dir" FM_ROOT_OVERRIDE="$ROOT" \
     FM_STATE_OVERRIDE="$state" FM_FAKE_TMUX_WINDOW='firstmate:fm-mate' \
     FM_SECONDMATE_WAKE_STALL_SECS=1 FM_POLL=1 FM_SIGNAL_GRACE=0 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
@@ -665,7 +665,7 @@ SH
 
   # The restarted generation still earns its own honest no-progress episode.
   printf '1012\n' > "$dir/now"
-  PATH="$fakebin:$PATH" FM_FAKE_NOW_FILE="$dir/now" FM_HOME="$dir" FM_ROOT_OVERRIDE="$ROOT" \
+  PATH="$fakebin:$PATH" FM_TEST_SEAM=1 FM_TEST_EPOCH_SECONDS_FILE="$dir/now" FM_FAKE_NOW_FILE="$dir/now" FM_HOME="$dir" FM_ROOT_OVERRIDE="$ROOT" \
     FM_STATE_OVERRIDE="$state" FM_FAKE_TMUX_WINDOW='firstmate:fm-mate' \
     FM_SECONDMATE_WAKE_STALL_SECS=1 FM_POLL=1 FM_SIGNAL_GRACE=0 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
@@ -871,7 +871,7 @@ test_secondmate_proven_idle_ring_lets_the_child_drain() {
     || fail "could not mark the mate idle"
 
   printf '1000\n' > "$dir/now"
-  PATH="$fakebin:$PATH" FM_FAKE_NOW_FILE="$dir/now" FM_HOME="$dir" FM_ROOT_OVERRIDE="$ROOT" \
+  PATH="$fakebin:$PATH" FM_TEST_SEAM=1 FM_TEST_EPOCH_SECONDS_FILE="$dir/now" FM_FAKE_NOW_FILE="$dir/now" FM_HOME="$dir" FM_ROOT_OVERRIDE="$ROOT" \
     FM_STATE_OVERRIDE="$state" FM_FAKE_TMUX_SENT="$dir/sent" \
     FM_SECONDMATE_WAKE_STALL_SECS=1 FM_POLL=1 FM_SIGNAL_GRACE=0 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
@@ -880,7 +880,7 @@ test_secondmate_proven_idle_ring_lets_the_child_drain() {
   [ ! -s "$dir/sent" ] || fail "a proven-idle mate was rung before the stall interval"
 
   printf '1002\n' > "$dir/now"
-  PATH="$fakebin:$PATH" FM_FAKE_NOW_FILE="$dir/now" FM_HOME="$dir" FM_ROOT_OVERRIDE="$ROOT" \
+  PATH="$fakebin:$PATH" FM_TEST_SEAM=1 FM_TEST_EPOCH_SECONDS_FILE="$dir/now" FM_FAKE_NOW_FILE="$dir/now" FM_HOME="$dir" FM_ROOT_OVERRIDE="$ROOT" \
     FM_STATE_OVERRIDE="$state" FM_FAKE_TMUX_SENT="$dir/sent" \
     FM_FAKE_CHILD_WAKE_QUEUE="$sub/state/.wake-queue" \
     FM_SECONDMATE_WAKE_STALL_SECS=1 FM_POLL=1 FM_SIGNAL_GRACE=0 \
@@ -935,7 +935,7 @@ test_term_stops_a_watcher_blocked_in_the_drain_ring_idle_capture() {
     || fail "could not mark the mate idle"
 
   printf '1000\n' > "$dir/now"
-  PATH="$fakebin:$PATH" FM_FAKE_NOW_FILE="$dir/now" FM_HOME="$dir" FM_ROOT_OVERRIDE="$ROOT" \
+  PATH="$fakebin:$PATH" FM_TEST_SEAM=1 FM_TEST_EPOCH_SECONDS_FILE="$dir/now" FM_FAKE_NOW_FILE="$dir/now" FM_HOME="$dir" FM_ROOT_OVERRIDE="$ROOT" \
     FM_STATE_OVERRIDE="$state" FM_FAKE_TMUX_SENT="$dir/sent" \
     FM_SECONDMATE_WAKE_STALL_SECS=1 FM_POLL=1 FM_SIGNAL_GRACE=0 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
@@ -961,7 +961,7 @@ SH
 
   printf '1002\n' > "$dir/now"
   touch "$state/.secondmate-liveness-tick"
-  PATH="$fakebin:$PATH" FM_FAKE_NOW_FILE="$dir/now" FM_HOME="$dir" FM_ROOT_OVERRIDE="$ROOT" \
+  PATH="$fakebin:$PATH" FM_TEST_SEAM=1 FM_TEST_EPOCH_SECONDS_FILE="$dir/now" FM_FAKE_NOW_FILE="$dir/now" FM_HOME="$dir" FM_ROOT_OVERRIDE="$ROOT" \
     FM_STATE_OVERRIDE="$state" FM_FAKE_TMUX_SENT="$dir/sent" \
     FM_FAKE_TMUX_CAPTURE="$fifo" FM_FAKE_CAPTURE_COUNT="$dir/captures" \
     FM_SECONDMATE_WAKE_STALL_SECS=1 FM_SECONDMATE_LIVENESS_SECS=99999999 \
@@ -1014,13 +1014,13 @@ test_secondmate_busy_and_unknown_panes_are_not_rung() {
   "$ROOT/bin/fm-busy-event.sh" arm "$state" mate >/dev/null \
     || fail "could not arm the mate's busy contract"
   printf '1000\n' > "$dir/now"
-  PATH="$fakebin:$PATH" FM_FAKE_NOW_FILE="$dir/now" FM_HOME="$dir" FM_ROOT_OVERRIDE="$ROOT" \
+  PATH="$fakebin:$PATH" FM_TEST_SEAM=1 FM_TEST_EPOCH_SECONDS_FILE="$dir/now" FM_FAKE_NOW_FILE="$dir/now" FM_HOME="$dir" FM_ROOT_OVERRIDE="$ROOT" \
     FM_STATE_OVERRIDE="$state" FM_FAKE_TMUX_SENT="$dir/sent-busy" \
     FM_SECONDMATE_WAKE_STALL_SECS=1 FM_POLL=1 FM_SIGNAL_GRACE=0 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
     secondmate_stall_watch_leg "$dir" "busy-first" progress mate "$(printf '1000\t100-7')"
   printf '1002\n' > "$dir/now"
-  PATH="$fakebin:$PATH" FM_FAKE_NOW_FILE="$dir/now" FM_HOME="$dir" FM_ROOT_OVERRIDE="$ROOT" \
+  PATH="$fakebin:$PATH" FM_TEST_SEAM=1 FM_TEST_EPOCH_SECONDS_FILE="$dir/now" FM_FAKE_NOW_FILE="$dir/now" FM_HOME="$dir" FM_ROOT_OVERRIDE="$ROOT" \
     FM_STATE_OVERRIDE="$state" FM_FAKE_TMUX_SENT="$dir/sent-busy" \
     FM_SECONDMATE_WAKE_STALL_SECS=1 FM_POLL=1 FM_SIGNAL_GRACE=0 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
@@ -1036,13 +1036,13 @@ test_secondmate_busy_and_unknown_panes_are_not_rung() {
   rm -rf "$state/.secondmate-wake-stall-receipts" "$state/mate.busy-state" "$state/mate.busy-gen"
   : > "$dir/sent-unknown"
   printf '1000\n' > "$dir/now"
-  PATH="$fakebin:$PATH" FM_FAKE_NOW_FILE="$dir/now" FM_HOME="$dir" FM_ROOT_OVERRIDE="$ROOT" \
+  PATH="$fakebin:$PATH" FM_TEST_SEAM=1 FM_TEST_EPOCH_SECONDS_FILE="$dir/now" FM_FAKE_NOW_FILE="$dir/now" FM_HOME="$dir" FM_ROOT_OVERRIDE="$ROOT" \
     FM_STATE_OVERRIDE="$state" FM_FAKE_TMUX_SENT="$dir/sent-unknown" \
     FM_SECONDMATE_WAKE_STALL_SECS=1 FM_POLL=1 FM_SIGNAL_GRACE=0 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
     secondmate_stall_watch_leg "$dir" "unknown-first" progress mate "$(printf '1000\t100-7')"
   printf '1002\n' > "$dir/now"
-  PATH="$fakebin:$PATH" FM_FAKE_NOW_FILE="$dir/now" FM_HOME="$dir" FM_ROOT_OVERRIDE="$ROOT" \
+  PATH="$fakebin:$PATH" FM_TEST_SEAM=1 FM_TEST_EPOCH_SECONDS_FILE="$dir/now" FM_FAKE_NOW_FILE="$dir/now" FM_HOME="$dir" FM_ROOT_OVERRIDE="$ROOT" \
     FM_STATE_OVERRIDE="$state" FM_FAKE_TMUX_SENT="$dir/sent-unknown" \
     FM_SECONDMATE_WAKE_STALL_SECS=1 FM_POLL=1 FM_SIGNAL_GRACE=0 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
@@ -1078,14 +1078,14 @@ test_secondmate_genuine_stall_after_idle_ring_still_alarms() {
     || fail "could not mark the mate idle"
 
   printf '1000\n' > "$dir/now"
-  PATH="$fakebin:$PATH" FM_FAKE_NOW_FILE="$dir/now" FM_HOME="$dir" FM_ROOT_OVERRIDE="$ROOT" \
+  PATH="$fakebin:$PATH" FM_TEST_SEAM=1 FM_TEST_EPOCH_SECONDS_FILE="$dir/now" FM_FAKE_NOW_FILE="$dir/now" FM_HOME="$dir" FM_ROOT_OVERRIDE="$ROOT" \
     FM_STATE_OVERRIDE="$state" FM_FAKE_TMUX_SENT="$dir/sent" \
     FM_SECONDMATE_WAKE_STALL_SECS=1 FM_POLL=1 FM_SIGNAL_GRACE=0 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
     secondmate_stall_watch_leg "$dir" "first" progress mate "$(printf '1000\t100-7')"
 
   printf '1002\n' > "$dir/now"
-  PATH="$fakebin:$PATH" FM_FAKE_NOW_FILE="$dir/now" FM_HOME="$dir" FM_ROOT_OVERRIDE="$ROOT" \
+  PATH="$fakebin:$PATH" FM_TEST_SEAM=1 FM_TEST_EPOCH_SECONDS_FILE="$dir/now" FM_FAKE_NOW_FILE="$dir/now" FM_HOME="$dir" FM_ROOT_OVERRIDE="$ROOT" \
     FM_STATE_OVERRIDE="$state" FM_FAKE_TMUX_SENT="$dir/sent" \
     FM_SECONDMATE_WAKE_STALL_SECS=1 FM_POLL=1 FM_SIGNAL_GRACE=0 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
@@ -1101,7 +1101,7 @@ test_secondmate_genuine_stall_after_idle_ring_still_alarms() {
     || fail "the unread ring rewrote the foreign queue"
 
   printf '1004\n' > "$dir/now"
-  PATH="$fakebin:$PATH" FM_FAKE_NOW_FILE="$dir/now" FM_HOME="$dir" FM_ROOT_OVERRIDE="$ROOT" \
+  PATH="$fakebin:$PATH" FM_TEST_SEAM=1 FM_TEST_EPOCH_SECONDS_FILE="$dir/now" FM_FAKE_NOW_FILE="$dir/now" FM_HOME="$dir" FM_ROOT_OVERRIDE="$ROOT" \
     FM_STATE_OVERRIDE="$state" FM_FAKE_TMUX_SENT="$dir/sent" \
     FM_SECONDMATE_WAKE_STALL_SECS=1 FM_POLL=1 FM_SIGNAL_GRACE=0 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \

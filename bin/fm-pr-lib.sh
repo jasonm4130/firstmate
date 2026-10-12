@@ -314,11 +314,20 @@ fm_pr_file_inode() {
 # an identity persisted before the remount no longer matches the live file
 # (fm_pr_poll_registration_rerecord_device).
 fm_pr_file_identity() {
-  local device inode
-  device=$(fm_pr_file_device "$1") || return 1
-  inode=$(fm_pr_file_inode "$1") || return 1
-  [ -n "$device" ] && [ -n "$inode" ] || return 1
-  printf '%s:%s\n' "$device" "$inode"
+  if [ "${_FM_UNAME:-$(uname)}" = Darwin ]; then
+    /usr/bin/stat -f '%d:%i' "$1" 2>/dev/null
+  else
+    stat -c '%d:%i' "$1" 2>/dev/null
+  fi
+}
+
+# One kernel snapshot for the process-event private-directory boundary.
+fm_pr_file_attributes() {  # <path>: device inode uid permission-bits
+  if [ "${_FM_UNAME:-$(uname)}" = Darwin ]; then
+    /usr/bin/stat -f '%d %i %u %Lp' "$1" 2>/dev/null
+  else
+    stat -c '%d %i %u %a' "$1" 2>/dev/null
+  fi
 }
 
 fm_pr_sha256() {

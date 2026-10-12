@@ -127,17 +127,21 @@ fm_procevent_owner_lease_path() {  # <state-root>
 # Record owner-presence activity in this home's process-event state. Best
 # effort by design: a home with no registry directory yet owns no runner.
 fm_procevent_owner_lease_touch() {  # <state-root>
-  local reg lease tmp now
+  local reg lease
   reg=$(fm_procevent_registry_dir "$1")
   [ -d "$reg" ] && [ ! -L "$reg" ] || return 1
   lease=$(fm_procevent_owner_lease_path "$1")
-  now=$(perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e \
-    'printf "%.6f\n", clock_gettime(CLOCK_MONOTONIC)') || return 1
-  tmp=$(umask 077; mktemp "$reg/.owner-lease.XXXXXX") || return 1
-  if ! printf '%s\n' "$now" > "$tmp" || ! mv -f -- "$tmp" "$lease"; then
-    rm -f -- "$tmp"
-    return 1
-  fi
+  perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -MFile::Temp=tempfile -e '
+    use strict;
+    use warnings;
+    my ($reg, $lease) = @ARGV;
+    my $now = clock_gettime(CLOCK_MONOTONIC);
+    my ($out, $tmp) = tempfile(".owner-lease.XXXXXX", DIR => $reg, UNLINK => 0);
+    if (!printf({$out} "%.6f\n", $now) || !close($out) || !rename($tmp, $lease)) {
+      unlink $tmp;
+      exit 1;
+    }
+  ' "$reg" "$lease"
 }
 
 # Seconds since the last refresh. Fails when the lease is absent or unreadable,
@@ -617,14 +621,10 @@ fm_procevent_claim_state_root_field_valid() {  # <canonical-state-root>
 }
 
 fm_procevent_claim_state_root_identity() {  # <state-root>
-  local state=$1 canonical device inode owner mode
-  canonical=$(fm_procevent_state_root_resolve "$state") || return 1
+  local canonical
+  canonical=$(CDPATH='' cd -P -- "$1" 2>/dev/null && pwd -P) || return 1
   fm_procevent_claim_state_root_field_valid "$canonical" || return 1
-  device=$(fm_pr_file_device "$canonical") || return 1
-  inode=$(fm_pr_file_inode "$canonical") || return 1
-  owner=$EUID
-  mode=$(fm_pr_file_mode "$canonical") || return 1
-  printf '%s\t%s\t%s\t%s\t%s\n' "$canonical" "$device" "$inode" "$owner" "$mode"
+  fm_procevent_private_directory_identity "$canonical" 0
 }
 
 fm_procevent_claim_owned_by_state() {  # <state-root> <legacy-home>
@@ -1023,11 +1023,15 @@ fm_procevent_state_root_resolve() {  # <state-root>
   printf '%s\n' "$canonical"
 }
 
-fm_procevent_private_directory_valid() {
-  local directory=$1 exact_mode=$2 canonical normalized mode
+# Validate the private directory and return its identity from one stat snapshot.
+# The owner guard repeats this every half check interval; no attribute is cached.
+fm_procevent_private_directory_identity() {  # <directory> <exact-mode>
+  local directory=$1 exact_mode=$2 canonical normalized attributes device inode owner mode
   [ -d "$directory" ] && [ ! -L "$directory" ] || return 1
-  fm_procevent_directory_owned_by_current_user "$directory" || return 1
-  mode=$(fm_pr_file_mode "$directory") || return 1
+  attributes=$(fm_pr_file_attributes "$directory") || return 1
+  IFS=' ' read -r device inode owner mode <<< "$attributes"
+  case "$device:$inode:$owner" in *[!0-9:]*) return 1 ;; esac
+  [ -n "$device" ] && [ -n "$inode" ] && [ "$owner" = "$EUID" ] || return 1
   case "$mode" in ''|*[!0-7]*) return 1 ;; esac
   if [ "$exact_mode" = 1 ]; then
     [ "$mode" = 700 ] || return 1
@@ -1036,7 +1040,12 @@ fm_procevent_private_directory_valid() {
   fi
   canonical=$(cd -P -- "$directory" && pwd -P) || return 1
   normalized=$(fm_procevent_path_normalize "$directory") || return 1
-  [ "$canonical" = "$normalized" ]
+  [ "$canonical" = "$normalized" ] || return 1
+  printf '%s\t%s\t%s\t%s\t%s\n' "$canonical" "$device" "$inode" "$owner" "$mode"
+}
+
+fm_procevent_private_directory_valid() {  # <directory> <exact-mode>
+  fm_procevent_private_directory_identity "$1" "$2" >/dev/null
 }
 
 fm_procevent_capture_inbox_prepare() {

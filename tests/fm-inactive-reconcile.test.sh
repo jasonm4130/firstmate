@@ -1038,6 +1038,42 @@ SH
   pass "reconciliation state reads set no-forge mode"
 }
 
+test_quiet_main_scan_skips_child_and_lock_only_within_cadence() {
+  local log real_ln
+  make_world quiet-scan
+  run_reconcile "$MAIN" --startup || fail "initial quiet scan failed"
+  log="$WORLD/lock-starts"
+  real_ln=$(command -v ln)
+  cat > "$WORLD/fakebin/ln" <<SHIM
+#!/bin/sh
+printf 'ln\n' >> "$log"
+exec "$real_ln" "\$@"
+SHIM
+  chmod +x "$WORLD/fakebin/ln"
+  : > "$log"
+  run_reconcile "$MAIN" || fail "quiet main scan failed"
+  [ ! -s "$log" ] || fail "quiet main scan acquired a lock before its cadence"
+  run_reconcile "$MAIN" --startup || fail "forced startup scan failed"
+  [ -s "$log" ] || fail "startup scan skipped the locked scan"
+  : > "$log"
+  age "$MAIN/state/.inactive-outcome-reconcile"
+  run_reconcile "$MAIN" || fail "due main scan failed"
+  [ -s "$log" ] || fail "due main scan skipped the locked scan"
+  : > "$log"
+  bind_secondmate local
+  run_reconcile "$MATE" --startup || fail "initial mate scan failed"
+  : > "$log"
+  run_reconcile "$MATE" || fail "quiet mate scan failed"
+  [ -s "$log" ] || fail "quiet mate scan skipped its per-poll ledger delivery"
+  rm -rf "$MAIN/state/terminal-outcomes"
+  mkdir "$WORLD/foreign-outcomes"
+  ln -s "$WORLD/foreign-outcomes" "$MAIN/state/terminal-outcomes"
+  run_reconcile "$MAIN" && fail "quiet cadence accepted a symlinked outcome directory"
+  pass "quiet main scan skips child and lock within cadence; startup, due, secondmate and unsafe-directory paths retain the locked scan"
+}
+
+test_quiet_main_scan_skips_child_and_lock_only_within_cadence
+
 test_main_direct_terminal_presentation_receipt
 test_branch_ack_retires_inactive_outcome_receipt
 test_unpushed_ci_ready_done_is_not_published

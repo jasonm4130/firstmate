@@ -452,7 +452,7 @@ window_kind() {
   local w=$1 meta kind
   meta=$(fm_backend_meta_for_window "$w" "$STATE" 2>/dev/null || true)
   if [ -n "$meta" ]; then
-    kind=$(grep '^kind=' "$meta" | cut -d= -f2- || true)
+    kind=$(fm_meta_values "$meta" kind)
     [ -n "$kind" ] || kind=ship
     echo "$kind"
     return 0
@@ -467,7 +467,7 @@ window_backend() {
   local w=$1 meta backend
   meta=$(fm_backend_meta_for_window "$w" "$STATE" 2>/dev/null || true)
   if [ -n "$meta" ]; then
-    backend=$(grep '^backend=' "$meta" | cut -d= -f2- || true)
+    backend=$(fm_meta_values "$meta" backend)
     [ -n "$backend" ] || backend=tmux
     echo "$backend"
     return 0
@@ -479,7 +479,7 @@ window_harness() {
   local w=$1 meta
   meta=$(fm_backend_meta_for_window "$w" "$STATE" 2>/dev/null || true)
   [ -n "$meta" ] || return 0
-  grep '^harness=' "$meta" | cut -d= -f2- || true
+  fm_meta_values "$meta" harness
 }
 
 window_label() {
@@ -765,7 +765,7 @@ signal_turnend_panes_churned() {  # <file> ...
     hash_bytes=$(LC_ALL=C wc -c 2>/dev/null < "$hash_file") || return 1
     hash_bytes=${hash_bytes//[[:space:]]/}
     [ "$hash_bytes" = 32 ] || return 1
-    prev=$(cat "$hash_file" 2>/dev/null) || return 1
+    prev=$(fm_read_file "$hash_file" 2>/dev/null) || return 1
     [[ $prev =~ ^[0-9a-f]{32}$ ]] || return 1
     watcher_capture "$backend" "$w" 40 "$label" || return 1
     now=$WATCHER_CAPTURE
@@ -775,7 +775,7 @@ signal_turnend_panes_churned() {  # <file> ...
   done
   # Enforce the deferral bound BEFORE any .stale- state is touched, so a wake that
   # surfaces here leaves the staleness backbone's own classification alone.
-  now_s=$(date +%s)
+  now_s=$(fm_epoch_seconds)
   for key in "${churned_keys[@]}"; do
     marker="$STATE/.churn-since-$key"
     if [ ! -e "$marker" ]; then
@@ -783,7 +783,7 @@ signal_turnend_panes_churned() {  # <file> ...
       missing_keys+=("$key")
       continue
     fi
-    since=$(cat "$marker" 2>/dev/null) || return 1
+    since=$(fm_read_file "$marker" 2>/dev/null) || return 1
     [[ $since =~ ^(0|[1-9][0-9]*)$ ]] || return 1
     if [ "${#since}" -gt "${#now_s}" ] \
       || { [ "${#since}" -eq "${#now_s}" ] && [[ $since > $now_s ]]; }; then
@@ -955,7 +955,7 @@ secondmate_ring_to_drain() {  # <task> <window>
 # Receipts close the append-before-marker crash window without changing the
 # foreign queue.
 secondmate_wake_stall_tick() {
-  local now=$(( $(date +%s) )) threshold=$SECONDMATE_WAKE_STALL_SECS
+  local now=$(( $(fm_epoch_seconds) )) threshold=$SECONDMATE_WAKE_STALL_SECS
   local meta task kind remote_host home queue row epoch seq row_key marker progress_marker ring_marker progress observed_at observed_key
   local receipt receipt_dir notify_key queued idle reason episode_alerted already_rung w
   # Endpoint metadata admits this queue-loop check; secondmate-liveness owns registered mates whose endpoint is missing or dead.
@@ -971,7 +971,7 @@ secondmate_wake_stall_tick() {
     home=$(fm_meta_get "$meta" home)
     [ -n "$home" ] || continue
     [ -f "$home/.fm-secondmate-home" ] && [ ! -L "$home/.fm-secondmate-home" ] || continue
-    [ "$(cat "$home/.fm-secondmate-home" 2>/dev/null || true)" = "$task" ] || continue
+    [ "$(fm_read_file "$home/.fm-secondmate-home" 2>/dev/null || true)" = "$task" ] || continue
     queue="$home/state/.wake-queue"
     row=$(secondmate_oldest_queue_row "$queue")
     marker="$STATE/.secondmate-wake-stall-$task"
@@ -997,7 +997,7 @@ EOF
       [ -f "$marker" ] && [ ! -L "$marker" ] || return 1
       episode_alerted=1
     fi
-    progress=$(cat "$progress_marker" 2>/dev/null || true)
+    progress=$(fm_read_file "$progress_marker" 2>/dev/null || true)
     observed_at=${progress%%[[:space:]]*}
     observed_key=${progress#*[[:space:]]}
     if [ "$observed_at" = "$progress" ]; then
@@ -1022,7 +1022,7 @@ EOF
     already_rung=0
     if [ -e "$ring_marker" ] || [ -L "$ring_marker" ]; then
       [ -f "$ring_marker" ] && [ ! -L "$ring_marker" ] || return 1
-      [ "$(cat "$ring_marker" 2>/dev/null || true)" = "$row_key" ] && already_rung=1
+      [ "$(fm_read_file "$ring_marker" 2>/dev/null || true)" = "$row_key" ] && already_rung=1
     fi
     if [ "$already_rung" -eq 0 ] && secondmate_idle_ring_safe "$w"; then
       if secondmate_ring_to_drain "$task" "$w"; then
@@ -1032,7 +1032,7 @@ EOF
       fi
     fi
     receipt="$receipt_dir/$row_key"
-    if [ "$(cat "$receipt" 2>/dev/null || true)" = "$row_key" ]; then
+    if [ "$(fm_read_file "$receipt" 2>/dev/null || true)" = "$row_key" ]; then
       fm_wake_secondmate_stall_marker_write "$task" "$row_key" || return 1
       continue
     fi
@@ -1070,7 +1070,7 @@ secondmate_liveness_tick() {
   local tick_marker="$STATE/.secondmate-liveness-tick"
   [ "$(age_of "$tick_marker")" -ge "$SECONDMATE_LIVENESS_SECS" ] || return 0
   touch "$tick_marker" || return 1
-  local now=$(( $(date +%s) )) meta id kind
+  local now=$(( $(fm_epoch_seconds) )) meta id kind
   local bound_marker attempts notify_key reason queued err first_reason='' failed=0
   for meta in "$STATE"/*.meta; do
     [ -e "$meta" ] || continue
@@ -1169,12 +1169,12 @@ FM_WEDGE_DEMAND_INSPECT_COUNT=${FM_WEDGE_DEMAND_INSPECT_COUNT:-3}
 resurface_absorbed() {  # <window> <throttle-marker> <age> <reason> [scope] [min-age]
   local win=$1 throttle=$2 age=$3 reason=$4 scope=${5-} min_age=${6:-$PAUSE_RESURFACE_SECS}
   if [ -z "$scope" ] || [ ! -e "$throttle" ] \
-    || [ "$(cat "$throttle" 2>/dev/null || true)" = "$scope" ]; then
+    || [ "$(fm_read_file "$throttle" 2>/dev/null || true)" = "$scope" ]; then
     [ "$age" -ge "$min_age" ] || return 0
     [ "$(age_of "$throttle")" -ge "$PAUSE_RESURFACE_SECS" ] || return 0   # 999999 when no prior re-surface
   fi
   fm_wake_append stale "$win" "$reason" || exit 1
-  if [ -n "$scope" ]; then printf '%s' "$scope" > "$throttle"; else date +%s > "$throttle"; fi
+  if [ -n "$scope" ]; then printf '%s' "$scope" > "$throttle"; else fm_epoch_seconds > "$throttle"; fi
   wake "$reason"
 }
 
@@ -1196,9 +1196,9 @@ wedge_defer_writing() {  # <window> <since-file> <triage-label> <idle-age>
   local win=$1 since_file=$2 label=$3 age=$4 key wsf wage
   key=$(window_key "$win")
   wsf="$STATE/.writing-since-$key"
-  [ -e "$wsf" ] || date +%s > "$wsf"
+  [ -e "$wsf" ] || fm_epoch_seconds > "$wsf"
   wage=$(age_of "$wsf")
-  date +%s > "$since_file"
+  fm_epoch_seconds > "$since_file"
   resurface_absorbed "$win" "$STATE/.writing-resurfaced-$key" "$wage" \
     "stale: $win (idle ${age}s, writing its worktree for ${wage}s, rechecked on a long cadence not a wedge; confirm the writes are real progress)"
   triage_log "absorbed $label (worktree written since the idle window opened, idle ${age}s): $win"
@@ -1314,7 +1314,7 @@ wedge_wait_evidence() {  # <task> -> one wait_record on stdout
   fi
   if status_is_paused "$last"; then
     if until=$(status_paused_until "$last"); then
-      [ "$(date +%s)" -lt "$until" ] || return 1
+      [ "$(fm_epoch_seconds)" -lt "$until" ] || return 1
     fi
     wait_record 'declared wait' 'awaiting external' \
       external 'confirm the wait still holds' "$statusf"
@@ -1414,13 +1414,13 @@ EOF
       wage=$age; min_age=0; waited=''
       ;;
     *)
-      wage=$(( $(date +%s) - mtime ))
+      wage=$(( $(fm_epoch_seconds) - mtime ))
       [ "$wage" -ge 0 ] || wage=0
       min_age=$PAUSE_RESURFACE_SECS; waited=", waiting ${wage}s"
       ;;
   esac
   clear_write_tracking "$key"
-  date +%s > "$since_file"
+  fm_epoch_seconds > "$since_file"
   resurface_absorbed "$win" "$STATE/.waiting-resurfaced-$key" "$wage" \
     "stale: $win (idle ${age}s${waited} - $kind, $subject, rechecked on a long cadence not a wedge; $action)" \
     '' "$min_age"
@@ -1483,12 +1483,12 @@ wedge_dead_record() {  # <window> <since-file> <triage-label> <idle-age> <pane-h
   esac
   # Re-arm the idle timer on BOTH paths below, so the backend probe above stays on
   # its once-per-STALE_ESCALATE_SECS budget instead of running on every poll.
-  date +%s > "$since_file"
+  fm_epoch_seconds > "$since_file"
   id=$hash
   if gen=$(fm_busy_current_gen "$STATE" "$task"); then
     id=$gen
   fi
-  if [ "$(cat "$marker" 2>/dev/null || true)" = "$agent_state $id" ]; then
+  if [ "$(fm_read_file "$marker" 2>/dev/null || true)" = "$agent_state $id" ]; then
     triage_log "absorbed $label (agent $agent_state, already reported once, idle ${age}s): $win"
     return 0
   fi
@@ -1524,13 +1524,13 @@ wedge_dead_record() {  # <window> <since-file> <triage-label> <idle-age> <pane-h
 # otherwise alarm pays for a backend read.
 wedge_timer_check() {  # <window> <since-file> <triage-label> <escalation-count-file> <task> <pane-hash>
   local win=$1 since_file=$2 label=$3 escalation_file=$4 task=$5 hash=$6 since age n reason evidence
-  since=$(cat "$since_file" 2>/dev/null || true)
+  since=$(fm_read_file "$since_file" 2>/dev/null || true)
   case "$since" in
     ''|*[!0-9]*)
       # Publish the repaired timer only after its old write-deferral chain is
       # gone, so observers cannot mistake a new idle window for the old chain.
       clear_write_tracking "$(window_key "$win")"
-      date +%s > "$since_file"
+      fm_epoch_seconds > "$since_file"
       triage_log "absorbed $label timer reset: $win"
       ;;
     *)
@@ -1548,7 +1548,7 @@ wedge_timer_check() {  # <window> <since-file> <triage-label> <escalation-count-
         if wedge_dead_record "$win" "$since_file" "$label" "$age" "$hash" "$task"; then
           return 0
         fi
-        n=$(( $(cat "$escalation_file" 2>/dev/null || echo 0) + 1 ))
+        n=$(( $(fm_read_file "$escalation_file" 2>/dev/null || echo 0) + 1 ))
         echo "$n" > "$escalation_file"
         reason="stale: $win (idle ${age}s, possible wedge, escalation $n)"
         if [ "$n" -ge "$FM_WEDGE_DEMAND_INSPECT_COUNT" ]; then
@@ -1602,8 +1602,8 @@ handle_paused_stale() {  # <window> <task> <hash>
   clear_write_tracking "$key"
   statusf="$STATE/$task.status"
   mtime=$(stat_mtime "$statusf")
-  case "$mtime" in ''|*[!0-9]*) mtime=$(date +%s) ;; esac
-  now=$(date +%s)
+  case "$mtime" in ''|*[!0-9]*) mtime=$(fm_epoch_seconds) ;; esac
+  now=$(fm_epoch_seconds)
   age=$(( now - mtime ))
   last=$(status_declared_wait_line "$statusf")
   min_age=$PAUSE_RESURFACE_SECS
@@ -1693,7 +1693,7 @@ busy_turn_bound_check() {  # <window> <task> <hash> <since-file> <escalation-fil
         triage_log "absorbed busy over-age pane (captain-held, never rechecked while the away-posture record exists): $win"
         return 0
       fi
-      if [ "$(cat "$STATE/.stale-$key" 2>/dev/null || true)" != "$declared" ]; then
+      if [ "$(fm_read_file "$STATE/.stale-$key" 2>/dev/null || true)" != "$declared" ]; then
         fm_wake_append stale "$win" "stale: $win" || exit 1
         printf '%s' "$declared" > "$STATE/.stale-$key"
         wake "stale: $win"
@@ -1784,7 +1784,7 @@ pause_state_class() {  # <window> <task>
   # the bounded re-surface cadence, and a forgotten declaration would rot invisibly.
   [ "$class" = none ] && class=paused
   case "$class" in
-    paused) date +%s > "$recheck_file" ;;
+    paused) fm_epoch_seconds > "$recheck_file" ;;
     *) rm -f "$recheck_file" ;;
   esac
   printf '%s' "$class"
@@ -1850,7 +1850,7 @@ captain_call_declaration() {  # <task> <call-identity>
 # so the throttle is never advanced by a sighting it just absorbed.
 stale_wait_throttled() {  # <window-key> <declaration>
   local throttle="$STATE/.paused-resurfaced-$1"
-  [ "$(cat "$throttle" 2>/dev/null || true)" = "$2" ] \
+  [ "$(fm_read_file "$throttle" 2>/dev/null || true)" = "$2" ] \
     && [ "$(age_of "$throttle")" -lt "$PAUSE_RESURFACE_SECS" ]
 }
 
@@ -1917,7 +1917,7 @@ surface_nonterminal_stale() {  # <window> <hash>
     bounded=0
     STALE_WAIT_DECLARATION=$(stale_wait_declaration "$task")
     if until=$(status_paused_until "$last"); then
-      now=$(date +%s)
+      now=$(fm_epoch_seconds)
       if [ "$now" -lt "$until" ]; then
         throttled=0
       else
@@ -1951,7 +1951,7 @@ surface_nonterminal_stale() {  # <window> <hash>
   clear_write_tracking "$key"
   if [ "$declared" -eq 0 ]; then
     : > "$STATE/.paused-$key"
-    date +%s > "$STATE/.paused-rechecked-$key"
+    fm_epoch_seconds > "$STATE/.paused-rechecked-$key"
   elif [ "$bounded" -eq 0 ]; then
     # A backlog hold is NOT a declared pause, and must not be dressed up as one:
     # the loop-top reconciliation and pause_state_class both read the status LINE,
@@ -2011,7 +2011,7 @@ scan_signals() {
     sf=$(fm_wake_signal_seen_path "$STATE" "$f")
     case "$f" in
       *.status) fm_wake_signal_seen_current "$STATE" "$f" && continue ;;
-      *) [ "$sig" = "$(cat "$sf" 2>/dev/null)" ] && continue ;;
+      *) [ "$sig" = "$(fm_read_file "$sf" 2>/dev/null)" ] && continue ;;
     esac
     printf '%s\t%s\t%s\n' "$sf" "$sig" "$f"
   done
@@ -2173,7 +2173,8 @@ run_check_capture() {
   set +m
   watcher_stop_signals
   [ -z "$FM_CHECK_SIGNAL_PENDING" ] || exit 1
-  pgid=$(ps -o pgid= -p "$FM_ACTIVE_CHECK_PID" 2>/dev/null | tr -d '[:space:]')
+  pgid=$(ps -o pgid= -p "$FM_ACTIVE_CHECK_PID" 2>/dev/null)
+  pgid=${pgid//[[:space:]]/}
   if [ -n "$pgid" ] && [ "$pgid" != "$FM_ACTIVE_CHECK_PGID" ]; then
     fm_active_check_stop || true
     fm_check_output_cleanup
@@ -2182,7 +2183,7 @@ run_check_capture() {
   wait "$FM_ACTIVE_CHECK_PID" 2>/dev/null || true
   FM_ACTIVE_CHECK_PID=
   fm_active_check_stop || return 1
-  FM_CHECK_RESULT=$(cat "$FM_CHECK_OUTPUT" 2>/dev/null || true)
+  FM_CHECK_RESULT=$(fm_read_file "$FM_CHECK_OUTPUT" 2>/dev/null || true)
   fm_check_output_cleanup
 }
 
@@ -2215,7 +2216,8 @@ watcher_capture() {  # <backend> <target> <lines> [expected-label]
   set +m
   watcher_stop_signals
   [ -z "$FM_CHECK_SIGNAL_PENDING" ] || exit 1
-  pgid=$(ps -o pgid= -p "$FM_ACTIVE_CHECK_PID" 2>/dev/null | tr -d '[:space:]')
+  pgid=$(ps -o pgid= -p "$FM_ACTIVE_CHECK_PID" 2>/dev/null)
+  pgid=${pgid//[[:space:]]/}
   if [ -n "$pgid" ] && [ "$pgid" != "$FM_ACTIVE_CHECK_PGID" ]; then
     fm_active_check_stop || true
     fm_capture_output_cleanup
@@ -2225,7 +2227,7 @@ watcher_capture() {  # <backend> <target> <lines> [expected-label]
   rc=$?
   FM_ACTIVE_CHECK_PID=
   fm_active_check_stop || { fm_capture_output_cleanup; return 1; }
-  WATCHER_CAPTURE=$(cat "$FM_CAPTURE_OUTPUT" 2>/dev/null || true)
+  WATCHER_CAPTURE=$(fm_read_file "$FM_CAPTURE_OUTPUT" 2>/dev/null || true)
   fm_capture_output_cleanup
   return "$rc"
 }
@@ -2600,7 +2602,7 @@ watcher_cleanup() {
   local cleanup_status=0 owns_lock=0 transition=release-lock
   pr_poll_publish_release || cleanup_status=1
   pr_poll_control_release || cleanup_status=1
-  if [ "$(cat "$WATCH_LOCK/pid" 2>/dev/null || true)" = "${WATCHER_PID:-}" ]; then
+  if [ "$(fm_read_file "$WATCH_LOCK/pid" 2>/dev/null || true)" = "${WATCHER_PID:-}" ]; then
     owns_lock=1
     if [ "${WATCHER_RECOVERY_PENDING:-0}" -eq 1 ] \
       && [ "${FM_WATCH_DELIVERED_REASON:-}" = "check: rearm-resurface" ]; then
@@ -2727,7 +2729,7 @@ while :; do
   # no-ops because the lock pid is not ours, so the survivor's lock is untouched.
   # This makes any duplicate self-resolve within one poll instead of persisting
   # and doubling every wake.
-  if [ "$(cat "$WATCH_LOCK/pid" 2>/dev/null || true)" != "$WATCHER_PID" ]; then
+  if [ "$(fm_read_file "$WATCH_LOCK/pid" 2>/dev/null || true)" != "$WATCHER_PID" ]; then
     exit 0
   fi
 
@@ -2946,7 +2948,7 @@ EOF
   # signature for an already-pending file (last write wins below).
   pending=$(scan_signals)
   if [ -n "$pending" ]; then
-    sleep "$SIGNAL_GRACE"
+    fm_sleep "$SIGNAL_GRACE"
     pending=$(printf '%s\n%s' "$pending" "$(scan_signals)")
     # The final coalesced signal set is the watcher-carried status-change
     # trigger for this home's published summary. Start it before either
@@ -3099,7 +3101,7 @@ EOF
     ssf="$STATE/.stale-since-$key"
     ewf="$STATE/.wedge-escalations-$key"
     pf="$STATE/.paused-$key"   # flag: this key's stale is using the bounded pause cadence
-    prev=$(cat "$hf" 2>/dev/null || true)
+    prev=$(fm_read_file "$hf" 2>/dev/null || true)
     # Busy match: a backend's native semantic state when available (herdr), else
     # the last 6 non-blank lines only (the TUI footer area, where every verified
     # harness renders its busy indicator) so busy-looking strings in displayed
@@ -3107,7 +3109,7 @@ EOF
     # reused below so a busy verdict is consistent within one cycle.
     if window_is_busy "$w" "$tail40"; then busy_now=0; else busy_now=1; fi
     if [ "$h" = "$prev" ]; then
-      n=$(( $(cat "$cf" 2>/dev/null || echo 0) + 1 ))
+      n=$(( $(fm_read_file "$cf" 2>/dev/null || echo 0) + 1 ))
       echo "$n" > "$cf"
       if [ "$n" -ge 2 ] && [ "$busy_now" -ne 0 ]; then
         # The pane is idle/stale at hash $h. Triage decides whether this wakes
@@ -3124,7 +3126,7 @@ EOF
           if captain_held_silenced "$last"; then
             printf '%s' "$h" > "$sf"
             triage_log "absorbed stale (captain-held, never rechecked while the away-posture record exists): $w"
-          elif [ "$(cat "$sf" 2>/dev/null || true)" != "$h" ]; then
+          elif [ "$(fm_read_file "$sf" 2>/dev/null || true)" != "$h" ]; then
             fm_wake_append stale "$w" "stale: $w" || exit 1
             printf '%s' "$h" > "$sf"
             wake "stale: $w"
@@ -3144,10 +3146,10 @@ EOF
           # line. On a NEW hash, give an active run/busy pane (the same
           # authoritative source fm-crew-state.sh itself already prioritizes
           # over the log) a chance to override before trusting the log.
-          if [ "$(cat "$sf" 2>/dev/null || true)" != "$h" ]; then
+          if [ "$(fm_read_file "$sf" 2>/dev/null || true)" != "$h" ]; then
             if crew_is_provably_working "$(window_to_task "$w" "$STATE")"; then
               printf '%s' "$h" > "$sf"
-              date +%s > "$ssf"
+              fm_epoch_seconds > "$ssf"
               clear_write_tracking "$key"
               triage_log "absorbed stale (provably working, overriding a stale captain-relevant status): $w"
             elif captain_call_stale_bound "$key" "$task"; then
@@ -3202,13 +3204,13 @@ EOF
           #     (it may be done via an interactive menu that wrote no done: status,
           #     waiting on a decision, or wedged) instead of leaving the finish to
           #     wait out the timer.
-          if [ "$(cat "$sf" 2>/dev/null || true)" != "$h" ]; then
+          if [ "$(fm_read_file "$sf" 2>/dev/null || true)" != "$h" ]; then
             task=$(window_to_task "$w" "$STATE")
             case "$(pause_state_class "$w" "$task")" in
               working)
                 clear_pause_tracking "$key"
                 printf '%s' "$h" > "$sf"
-                date +%s > "$ssf"
+                fm_epoch_seconds > "$ssf"
                 triage_log "absorbed non-terminal stale (provably working): $w"
                 ;;
               paused)
@@ -3291,7 +3293,7 @@ EOF
   # what. Time-based via .last-heartbeat mtime; interval doubles per consecutive
   # no-change heartbeat (idle fleet) up to HEARTBEAT_MAX, and resets on any
   # surfaced non-heartbeat wake.
-  streak=$(cat "$STATE/.heartbeat-streak" 2>/dev/null || echo 0)
+  streak=$(fm_read_file "$STATE/.heartbeat-streak" 2>/dev/null || echo 0)
   [ "$streak" -gt 12 ] && streak=12
   hb=$(( HEARTBEAT * (1 << streak) ))
   [ "$hb" -gt "$HEARTBEAT_MAX" ] && hb=$HEARTBEAT_MAX
@@ -3321,7 +3323,7 @@ EOF
         wake "heartbeat"
       fi
       touch "$STATE/.last-heartbeat"
-      echo $(( $(cat "$STATE/.heartbeat-streak" 2>/dev/null || echo 0) + 1 )) > "$STATE/.heartbeat-streak"
+      echo $(( $(fm_read_file "$STATE/.heartbeat-streak" 2>/dev/null || echo 0) + 1 )) > "$STATE/.heartbeat-streak"
       triage_log "absorbed heartbeat (no captain-relevant change)"
     fi
   fi
