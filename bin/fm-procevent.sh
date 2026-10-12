@@ -1556,8 +1556,9 @@ cmd_owner_watchdog() {  # <source-id> <runner-pid> <runner-identity> <ready-file
     || die "owning home lease is not fresh at owner guard initialization"
   printf 'ready\n' > "$ready" || die "cannot confirm owner guard initialization"
   trap - EXIT
+  fm_sleep_open
   while :; do
-    sleep "$half"
+    fm_sleep "$half"
     fm_procevent_pid_state "$pid" "$identity"
     pid_state=$?
     case "$pid_state" in
