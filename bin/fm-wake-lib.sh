@@ -64,8 +64,8 @@ fi
 fm_epoch_seconds() {
   local now
   # Deterministic watcher scenarios used to shim date on PATH. The stdout
-  # clock preserves that seam without adding a date start to real polls;
-  # the output-variable clock keeps its existing real-time semantics.
+  # clock preserves that seam without a date start on Bash 4.2+; Bash 3.2
+  # still starts date. The output-variable clock keeps real-time semantics.
   if [ "${FM_TEST_SEAM:-}" = 1 ] && [ -n "${FM_TEST_EPOCH_SECONDS_FILE:-}" ]; then
     IFS= read -r now < "$FM_TEST_EPOCH_SECONDS_FILE" || return 1
     case "$now" in ''|*[!0-9]*) return 1 ;; esac
