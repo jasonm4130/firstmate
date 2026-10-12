@@ -1,0 +1,2 @@
+error: teardown refused: required source fm-task-resources-lib.sh is missing or unreadable; nothing was changed
+not ok - teardown exited non-zero with a valid tasktmp
