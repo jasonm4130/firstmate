@@ -4320,6 +4320,16 @@ printf '%s\n' "\$*" >> "\$INTERVAL_SLEEP_LOG"
 exec "$REAL_SLEEP" "\$@"
 SH
 chmod +x "$INTERVAL_BIN/sleep"
+# A whole-second fm_sleep waits on a FIFO and starts no sleep; refusing only
+# that FIFO sends the guard down fm_sleep's sleep fallback with the same
+# argument, while the runner's own launch pipe is still created.
+REAL_MKFIFO=$(command -v mkfifo) || fail "this host has no mkfifo"
+cat > "$INTERVAL_BIN/mkfifo" <<SH
+#!/usr/bin/env bash
+case "\${*: -1}" in */fm-sleep.*/fifo) exit 1 ;; esac
+exec "$REAL_MKFIFO" "\$@"
+SH
+chmod +x "$INTERVAL_BIN/mkfifo"
 for interval in 08 010; do
   case "$interval" in
     08) expected_half=4 ;;

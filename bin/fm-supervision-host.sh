@@ -169,8 +169,8 @@
 # monotonic-clock guarantee. Arm exit probes wait 0.5 seconds through fm_sleep
 # (bin/fm-wake-lib.sh), which starts no sleep program except on Bash 3.2,
 # within the unchanged POLL-cadence maintenance and boundary checks; close
-# observation may wait that interval plus work/scheduling time, and so may a
-# shell-only caught signal during a Bash 3.2 child sleep. The per-POLL identity
+# observation and a shell-only caught signal may wait that interval plus
+# work/scheduling time. The per-POLL identity
 # refresh of an arm stops once the arm has written output, since its identity
 # is final by then. No stop-signal disposition or cleanup bound changes.
 # FM_TEST_SUPERVISION_HOST_CLOCK names a file holding the park's elapsed

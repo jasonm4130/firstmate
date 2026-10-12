@@ -61,8 +61,11 @@ fi
 # security agents otherwise inspect on every iteration. A loop's owning process
 # calls fm_sleep_open once; fm_sleep then waits in read -t on a private FIFO held
 # open read-write, which never delivers data or EOF, so the wait ends at its
-# timeout, and a trapped signal runs its handler at once rather than after the
-# wait. It runs sleep instead with no open FIFO, for a value read -t cannot take,
+# timeout. The read runs in a subshell, a fork that starts no program: a trap
+# that exits during read -t in the same shell leaves its timer armed, and it
+# later fires inside the EXIT trap and hangs or aborts Bash (3.2 and 5.x). As
+# with sleep, a trapped signal sent to the shell alone is handled once the wait
+# ends. It runs sleep instead with no open FIFO, for a value read -t cannot take,
 # and for a fractional wait on Bash 3.2, whose read -t takes whole seconds. A
 # FIFO read that ends early drops the FIFO for the rest of the process, so a
 # broken descriptor can never turn a loop into a spin.
@@ -77,7 +80,7 @@ fm_sleep_open() {
 }
 
 fm_sleep() {  # <seconds>
-  local line start rc=0
+  local start rc=0
   case "$1" in
     ''|*[!0-9.]*|.*|*.|*.*.*) sleep "$1"; return ;;
     *[1-9]*) ;;
@@ -85,7 +88,7 @@ fm_sleep() {  # <seconds>
   esac
   if [ -n "${FM_SLEEP_FD:-}" ]; then
     if [ "${BASH_VERSINFO[0]}" -ge 4 ]; then
-      read -r -t "$1" -u "$FM_SLEEP_FD" line 2>/dev/null || rc=$?
+      ( read -r -t "$1" -u "$FM_SLEEP_FD" _ ) 2>/dev/null || rc=$?
       [ "$rc" -le 128 ] || return 0
       FM_SLEEP_FD=
     else
@@ -93,7 +96,7 @@ fm_sleep() {  # <seconds>
         *.*) ;;
         *)
           start=$SECONDS
-          read -r -t "$1" -u "$FM_SLEEP_FD" line 2>/dev/null || rc=$?
+          ( read -r -t "$1" -u "$FM_SLEEP_FD" _ ) 2>/dev/null || rc=$?
           [ $((SECONDS - start)) -lt "$1" ] || return 0
           FM_SLEEP_FD=
           ;;

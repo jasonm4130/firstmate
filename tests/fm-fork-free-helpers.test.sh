@@ -284,23 +284,41 @@ test_sleep_helper_waits_without_starting_sleep() {
   pass "fm_sleep waits its full time inside bash, and falls back to sleep without a usable FIFO"
 }
 
-test_sleep_helper_returns_promptly_on_a_trapped_signal() {
-  local script="$TMP_ROOT/sleep-signal.sh" shim="$TMP_ROOT/sleep-signal-shim" log="$TMP_ROOT/sleep-signal.log"
+test_sleep_helper_survives_a_trap_that_exits_mid_wait() {
+  local script="$TMP_ROOT/sleep-exit.sh" child="$TMP_ROOT/sleep-exit-child.sh"
+  local shim="$TMP_ROOT/sleep-exit-shim" log="$TMP_ROOT/sleep-exit.log"
   make_sleep_shim "$shim" "$log"
+  # A TERM trap that exits while the wait is pending, then an EXIT trap whose
+  # work outlasts the wait's timeout: a read -t timer left armed in this shell
+  # would fire inside that work and hang or abort Bash.
+  cat > "$child" <<'SH'
+. "$1/bin/fm-wake-lib.sh"
+done_file=$2
+trap 'perl -e "select undef, undef, undef, 1.5"; x=$(printf ok); printf "%s" "$x" > "$done_file"' EXIT
+trap 'exit 143' TERM
+fm_sleep_open
+: > "$done_file.ready"
+while :; do fm_sleep 1; done
+SH
   # shellcheck disable=SC2016 # Expanded by the child shell.
   printf '%s\n' "$SLEEP_CASE_PREAMBLE" \
-    'for signal in TERM HUP; do' \
-    '  t=$(now)' \
-    '  "$BASH" -c ". \"\$1/bin/fm-wake-lib.sh\"; trap \"exit 0\" $signal; fm_sleep_open; fm_sleep 10" _ "$1" &' \
-    '  child=$!' \
-    '  pause 0.3' \
-    '  kill "-$signal" "$child"' \
-    '  wait "$child"' \
-    '  within "$t" 0.3 5 "a ten-second wait stopped by a trapped $signal"' \
-    'done' \
-    'sleeps 0 "a wait stopped by a signal"' > "$script"
-  run_everywhere "fm_sleep signal" "$script" "$shim" "$log"
-  pass "fm_sleep runs a trapped TERM or HUP handler at once rather than after the wait"
+    'done_file="$log.cleanup"' \
+    'rm -f "$done_file" "$done_file.ready"' \
+    '"$BASH" "$4" "$1" "$done_file" &' \
+    'child=$!' \
+    'for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do [ -e "$done_file.ready" ] && break; pause 0.5; done' \
+    'pause 0.2' \
+    't=$(now)' \
+    'kill -TERM "$child"' \
+    'for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do kill -0 "$child" 2>/dev/null || break; pause 0.5; done' \
+    'if kill -0 "$child" 2>/dev/null; then kill -KILL "$child"; printf "bash %s: a shell TERMed mid-wait hung in its EXIT trap\n" "$BASH_VERSION"; fi' \
+    'wait "$child"; rc=$?' \
+    '[ "$rc" -eq 143 ] || printf "bash %s: a shell TERMed mid-wait exited %s, not 143\n" "$BASH_VERSION" "$rc"' \
+    '[ "$(cat "$done_file" 2>/dev/null)" = ok ] || printf "bash %s: the EXIT trap did not finish its work\n" "$BASH_VERSION"' \
+    'within "$t" 1.5 6 "a TERMed wait plus its EXIT trap"' \
+    'sleeps 0 "a TERMed whole-second wait"' > "$script"
+  run_everywhere "fm_sleep exit trap" "$script" "$shim" "$log" "$child"
+  pass "a trap that exits during fm_sleep leaves its EXIT trap free to finish"
 }
 
 test_identity_helpers_match_the_pipelines_they_replace() {
@@ -370,7 +388,7 @@ else
   test_window_to_task_matches_the_meta_pipeline
   test_classify_stat_helpers_read_the_kernel_name_once
   test_sleep_helper_waits_without_starting_sleep
-  test_sleep_helper_returns_promptly_on_a_trapped_signal
+  test_sleep_helper_survives_a_trap_that_exits_mid_wait
   test_identity_helpers_match_the_pipelines_they_replace
   test_pr_file_helpers_read_the_kernel_name_once
 fi
