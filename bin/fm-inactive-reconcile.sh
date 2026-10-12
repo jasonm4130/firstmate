@@ -130,7 +130,7 @@ if [ "$FM_INACTIVE_RECONCILE_BUDGET_SECS" -gt 30 ]; then
   exit 2
 fi
 
-if [ "$(uname)" = Darwin ]; then
+if [ "$_FM_UNAME" = Darwin ]; then
   file_mtime() { /usr/bin/stat -f %m "$1" 2>/dev/null; }
 else
   file_mtime() { stat -c %Y "$1" 2>/dev/null; }
@@ -138,7 +138,7 @@ fi
 
 reconcile_now() {
   case "${FM_INACTIVE_RECONCILE_NOW:-}" in
-    ''|*[!0-9]*) date +%s ;;
+    ''|*[!0-9]*) fm_epoch_seconds ;;
     *) printf '%s\n' "$FM_INACTIVE_RECONCILE_NOW" ;;
   esac
 }
@@ -664,6 +664,15 @@ case "$mode" in
       --startup) startup=1 ;;
       *) printf 'usage: fm-inactive-reconcile.sh scan [--startup]\n' >&2; exit 2 ;;
     esac
+    # A main home's quiet cadence needs no timed child or lock. The locked
+    # scan rechecks when due; a secondmate still delivers ledger outcomes on
+    # every poll, including an invalid identity marker's diagnostic path.
+    if [ "$startup" -eq 0 ] && [ -w "$STATE" ] && [ -w "$OUTCOME_DIR" ] \
+      && [ ! -e "$FM_HOME/.fm-secondmate-home" ] && [ ! -L "$FM_HOME/.fm-secondmate-home" ] \
+      && [ -d "$OUTCOME_DIR" ] && [ ! -L "$OUTCOME_DIR" ] \
+      && [ "$(scan_marker_age)" -lt "$FM_INACTIVE_RECONCILE_SECS" ]; then
+      exit 0
+    fi
     # The scan's own whole-second deadline enforces the budget; this outer
     # process-group kill is only the backstop for a scan wedged outside every
     # bounded section (an unbounded lock wait), so it fires one second after

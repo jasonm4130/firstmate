@@ -242,7 +242,7 @@
 # about the source side of the handoff.
 set -u
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(d=${BASH_SOURCE[0]%/*}; [ "$d" != "${BASH_SOURCE[0]}" ] || d=.; cd "${d:-/}" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
@@ -968,8 +968,9 @@ owner_lease_refresh() {
 
 owner_lease_keepalive() {  # <parent-pid> <parent-identity>
   local parent=$1 identity=$2 state
+  fm_sleep_open
   while :; do
-    sleep 1
+    fm_sleep 1
     fm_procevent_pid_state "$parent" "$identity"
     state=$?
     case "$state" in

@@ -15,8 +15,8 @@ FM_LOCK_STALE_AFTER="${FM_LOCK_STALE_AFTER:-2}"
 # Resolved once at source time: fm_pid_identity and fm_path_mtime run inside 0.2s
 # confirm and 0.5s attach polls, and forking uname per call is a measurable cost on
 # the platform (Git Bash/MSYS) that already pays the highest fork price.
-_FM_UNAME=$(uname 2>/dev/null || echo unknown)
-mkdir -p "$STATE"
+_FM_UNAME=${_FM_UNAME:-$(uname 2>/dev/null || echo unknown)}
+[ -d "$STATE" ] || mkdir -p "$STATE"
 
 # Most wake-library consumers need only queue and lock primitives, including
 # deliberately minimal recovery fixtures and remote installations.
@@ -39,7 +39,11 @@ _fm_wake_require_timeout() {
 # On Bash 3.2, exec a child shell so its PPID identifies this frame, unlike $$.
 fm_current_pid() {  # [output-variable]
   local fm_pid
-  fm_pid=${BASHPID:-$(exec sh -c 'printf "%s\n" "$PPID"')} || return 1
+  if [ -n "${BASHPID:-}" ]; then
+    fm_pid=$BASHPID
+  else
+    fm_pid=$(exec sh -c 'printf "%s\n" "$PPID"') || return 1
+  fi
   case "$fm_pid" in ''|*[!0-9]*|0) return 1 ;; esac
   if [ "$#" -gt 0 ]; then
     printf -v "$1" '%s' "$fm_pid"
@@ -56,6 +60,20 @@ if [ "${BASH_VERSINFO[0]}" -gt 4 ] || { [ "${BASH_VERSINFO[0]}" -eq 4 ] && [ "${
 else
   fm_epoch_seconds_to() { printf -v "$1" '%s' "$(date +%s)"; }
 fi
+
+fm_epoch_seconds() {
+  local now
+  # Deterministic watcher scenarios used to shim date on PATH. The stdout
+  # clock preserves that seam without a date start on Bash 4.2+; Bash 3.2
+  # still starts date. The output-variable clock keeps real-time semantics.
+  if [ "${FM_TEST_SEAM:-}" = 1 ] && [ -n "${FM_TEST_EPOCH_SECONDS_FILE:-}" ]; then
+    IFS= read -r now < "$FM_TEST_EPOCH_SECONDS_FILE" || return 1
+    case "$now" in ''|*[!0-9]*) return 1 ;; esac
+  else
+    fm_epoch_seconds_to now || return 1
+  fi
+  printf '%s\n' "$now"
+}
 
 # Process-start-free stand-in for `sleep` in polling loops, which endpoint
 # security agents otherwise inspect on every iteration. A loop's owning process
@@ -106,6 +124,16 @@ fm_sleep() {  # <seconds>
   sleep "$1"
 }
 
+# Read the value a $(cat file) substitution would return without starting cat.
+# Bash's optimized file substitution preserves whitespace and unterminated
+# lines; callers still decide how to parse the complete contents.
+fm_read_file() {  # <path>
+  local content
+  [ ! -d "$1" ] || return 1
+  content=$(<"$1") || return 1
+  printf '%s' "$content"
+}
+
 fm_pid_alive() {
   local pid=$1
   case "$pid" in
@@ -128,7 +156,7 @@ fm_pid_identity() {
   # Git Bash/MSYS exposes these compatible files but its Cygwin ps rejects the
   # portable fallback's -o fields, so capability detection must not key on uname.
   if [ -r "$proc_root/$pid/stat" ] && [ -r "$proc_root/$pid/cmdline" ]; then
-    stat_line=$(cat "$proc_root/$pid/stat" 2>/dev/null) || return 1
+    stat_line=$(fm_read_file "$proc_root/$pid/stat" 2>/dev/null) || return 1
     # After the final comm delimiter, array index 19 is proc stat field 22.
     read -r -a stat_fields <<< "${stat_line##*)}"
     [ "${#stat_fields[@]}" -ge 20 ] || return 1
@@ -214,7 +242,7 @@ fm_watcher_lock_unheld() {
   lockdir="$state/.watch.lock"
   [ ! -e "$lockdir" ] && return 0
   [ ! -e "$lockdir/pid" ] && return 0
-  pid=$(cat "$lockdir/pid" 2>/dev/null) || return 1
+  pid=$(fm_read_file "$lockdir/pid" 2>/dev/null) || return 1
   [ -z "$pid" ]
 }
 
@@ -223,9 +251,9 @@ fm_watcher_lock_matches_pid() {
   local state=$1 watch_path=$2 pid=$3 home=${4:-$FM_HOME} lockdir lock_home lock_path lock_identity current_identity
   FM_WATCHER_MATCHED_IDENTITY=
   lockdir="$state/.watch.lock"
-  lock_home=$(cat "$lockdir/fm-home" 2>/dev/null || true)
-  lock_path=$(cat "$lockdir/watcher-path" 2>/dev/null || true)
-  lock_identity=$(cat "$lockdir/pid-identity" 2>/dev/null || true)
+  lock_home=$(fm_read_file "$lockdir/fm-home" 2>/dev/null || true)
+  lock_path=$(fm_read_file "$lockdir/watcher-path" 2>/dev/null || true)
+  lock_identity=$(fm_read_file "$lockdir/pid-identity" 2>/dev/null || true)
   [ "$lock_home" = "$home" ] || return 1
   [ "$lock_path" = "$watch_path" ] || return 1
   [ -n "$lock_identity" ] || return 1
@@ -242,7 +270,7 @@ fm_watcher_healthy() {
   FM_WATCHER_HEALTHY_IDENTITY=
   lockdir="$state/.watch.lock"
   beat="$state/.last-watcher-beat"
-  pid=$(cat "$lockdir/pid" 2>/dev/null || true)
+  pid=$(fm_read_file "$lockdir/pid" 2>/dev/null || true)
   fm_pid_alive "$pid" || return 1
   fm_watcher_lock_matches_pid "$state" "$watch_path" "$pid" "$home" || return 1
   identity=$FM_WATCHER_MATCHED_IDENTITY
@@ -418,9 +446,9 @@ fm_afk_daemon_owns_supervision() {
   local state=$1 lockdir pid recorded current
   [ -e "$state/.afk" ] || return 1
   lockdir="$state/.supervise-daemon.lock"
-  pid=$(cat "$lockdir/pid" 2>/dev/null) || return 1
+  pid=$(fm_read_file "$lockdir/pid" 2>/dev/null) || return 1
   fm_pid_alive "$pid" || return 1
-  recorded=$(cat "$lockdir/pid-identity" 2>/dev/null) || return 1
+  recorded=$(fm_read_file "$lockdir/pid-identity" 2>/dev/null) || return 1
   [ -n "$recorded" ] || return 1
   current=$(fm_pid_identity "$pid" 2>/dev/null) || return 1
   [ -n "$current" ] || return 1
@@ -533,10 +561,10 @@ fm_lock_set_role() {
     *) return 1 ;;
   esac
   fm_current_pid current || return 1
-  pid=$(cat "$lockdir/pid" 2>/dev/null || true)
+  pid=$(fm_read_file "$lockdir/pid" 2>/dev/null || true)
   [ "$pid" = "$current" ] || return 1
   printf '%s\n' "$role" > "$lockdir/role" 2>/dev/null || return 1
-  back=$(cat "$lockdir/role" 2>/dev/null || true)
+  back=$(fm_read_file "$lockdir/role" 2>/dev/null || true)
   [ "$back" = "$role" ]
 }
 
@@ -562,7 +590,7 @@ fm_lock_prepare_owner() {
   local ownerdir=$1 mypid back
   fm_current_pid mypid || return 1
   printf '%s\n' "$mypid" > "$ownerdir/pid" 2>/dev/null || return 1
-  back=$(cat "$ownerdir/pid" 2>/dev/null || true)
+  back=$(fm_read_file "$ownerdir/pid" 2>/dev/null || true)
   [ "$back" = "$mypid" ]
 }
 
@@ -614,7 +642,7 @@ fm_lock_claim() {
     fm_lock_discard_owner "$ownerdir"
     return 1
   fi
-  back=$(cat "$ownerdir/pid" 2>/dev/null || true)
+  back=$(fm_read_file "$ownerdir/pid" 2>/dev/null || true)
   if [ "$back" != "$mypid" ]; then
     fm_lock_discard_owner "$ownerdir"
     return 1
@@ -692,7 +720,7 @@ fm_lock_recheck_stale_owner() {
   elif [ -e "$lockdir" ] || [ -L "$lockdir" ]; then
     [ -d "$lockdir" ] && [ ! -L "$lockdir" ] || return 1
   fi
-  actual_pid=$(cat "$lockdir/pid" 2>/dev/null || true)
+  actual_pid=$(fm_read_file "$lockdir/pid" 2>/dev/null || true)
   [ "$actual_pid" = "$expected_pid" ] || return 1
   if fm_pid_alive "$actual_pid"; then
     return 1
@@ -1057,7 +1085,7 @@ fm_recovery_marker_handover_snapshot() {  # <marker>
     FM_RECOVERY_HANDOVER_TOKEN=$FM_RECOVERY_MARKER_TOKEN
   fi
   # shellcheck disable=SC2034 # Read by callers after this function returns.
-  FM_RECOVERY_HANDOVER_SEQ=$(cat "$STATE/.wake-queue.seq" 2>/dev/null || true)
+  FM_RECOVERY_HANDOVER_SEQ=$(fm_read_file "$STATE/.wake-queue.seq" 2>/dev/null || true)
   fm_lock_release "$lock"
   fm_lock_release "$FM_WAKE_QUEUE_LOCK"
 }
@@ -1071,7 +1099,7 @@ _fm_recovery_marker_handover_restore() {
     fm_lock_release "$FM_WAKE_QUEUE_LOCK"
     return 1
   fi
-  if [ "$(cat "$STATE/.wake-queue.seq" 2>/dev/null || true)" = "$seq" ] \
+  if [ "$(fm_read_file "$STATE/.wake-queue.seq" 2>/dev/null || true)" = "$seq" ] \
     && fm_recovery_marker_read "$marker"; then
     case "$FM_RECOVERY_MARKER_TOKEN" in
       pending:downtime:*)
@@ -1170,7 +1198,7 @@ fm_lock_reap_dead_link() {
   owner=$(fm_lock_link_owner "$lockdir" 2>/dev/null) || return 1
   fm_current_pid current || return 1
   if [ -d "$owner" ]; then
-    pid=$(cat "$owner/pid" 2>/dev/null || true)
+    pid=$(fm_read_file "$owner/pid" 2>/dev/null || true)
     fm_lock_recheck_stale_owner "$lockdir" "$owner" "$pid" || return 1
     token=$owner
   else
@@ -1205,7 +1233,7 @@ fm_lock_try_acquire_steal_mutex() {  # <steal-lock>
   fm_lock_try_create "$lockdir" && return 0
   fm_current_pid current || return 1
   fm_lock_reap_dead_link "$lockdir.steal" || true
-  if [ "$(cat "$lockdir/pid" 2>/dev/null || true)" = "$current" ]; then
+  if [ "$(fm_read_file "$lockdir/pid" 2>/dev/null || true)" = "$current" ]; then
     fm_lock_remove_path "$lockdir" || true
   elif [ -e "$lockdir" ] || [ -L "$lockdir" ]; then
     fm_lock_reap_dead_link "$lockdir" || return 1
@@ -1224,7 +1252,7 @@ fm_lock_try_acquire() {
   fi
 
   fm_current_pid current || return 1
-  pid=$(cat "$lockdir/pid" 2>/dev/null || true)
+  pid=$(fm_read_file "$lockdir/pid" 2>/dev/null || true)
   if [ -n "$pid" ] && [ "$pid" = "$current" ]; then
     # The recorded holder is THIS very process. Single-threaded bash can only
     # observe that when an interrupting trap abandoned the frame that held the
@@ -1238,7 +1266,7 @@ fm_lock_try_acquire() {
     if fm_lock_try_create "$lockdir"; then
       return 0
     fi
-    FM_LOCK_HELD_PID=$(cat "$lockdir/pid" 2>/dev/null || true)
+    FM_LOCK_HELD_PID=$(fm_read_file "$lockdir/pid" 2>/dev/null || true)
     return 1
   fi
   if fm_pid_alive "$pid"; then
@@ -1252,13 +1280,13 @@ fm_lock_try_acquire() {
 
   steal="$lockdir.steal"
   if ! fm_lock_try_acquire_steal_mutex "$steal"; then
-    FM_LOCK_HELD_PID=$(cat "$lockdir/pid" 2>/dev/null || true)
+    FM_LOCK_HELD_PID=$(fm_read_file "$lockdir/pid" 2>/dev/null || true)
     FM_LOCK_OWNER_DIR=
     return 1
   fi
   steal_owner=${FM_LOCK_OWNER_DIR:-}
 
-  cur=$(cat "$lockdir/pid" 2>/dev/null || true)
+  cur=$(fm_read_file "$lockdir/pid" 2>/dev/null || true)
   if fm_pid_alive "$cur"; then
     fm_lock_release "$steal"
     FM_LOCK_HELD_PID=$cur
@@ -1273,7 +1301,7 @@ fm_lock_try_acquire() {
   fi
   if ! fm_lock_points_to_owner "$steal" "$steal_owner"; then
     fm_lock_release "$steal"
-    FM_LOCK_HELD_PID=$(cat "$lockdir/pid" 2>/dev/null || true)
+    FM_LOCK_HELD_PID=$(fm_read_file "$lockdir/pid" 2>/dev/null || true)
     FM_LOCK_OWNER_DIR=
     return 1
   fi
@@ -1282,10 +1310,10 @@ fm_lock_try_acquire() {
   if [ -L "$lockdir" ]; then
     primary_owner=$(fm_lock_link_owner "$lockdir" 2>/dev/null || true)
   fi
-  cur=$(cat "$lockdir/pid" 2>/dev/null || true)
+  cur=$(fm_read_file "$lockdir/pid" 2>/dev/null || true)
   if ! fm_lock_recheck_stale_owner "$lockdir" "$primary_owner" "$cur"; then
     fm_lock_release "$steal"
-    FM_LOCK_HELD_PID=$(cat "$lockdir/pid" 2>/dev/null || true)
+    FM_LOCK_HELD_PID=$(fm_read_file "$lockdir/pid" 2>/dev/null || true)
     FM_LOCK_OWNER_DIR=
     return 1
   fi
@@ -1306,7 +1334,7 @@ fm_lock_try_acquire() {
   fi
   if [ "$rc" -ne 0 ]; then
     # shellcheck disable=SC2034 # Read by callers after fm_lock_try_acquire returns.
-    FM_LOCK_HELD_PID=$(cat "$lockdir/pid" 2>/dev/null || true)
+    FM_LOCK_HELD_PID=$(fm_read_file "$lockdir/pid" 2>/dev/null || true)
     FM_LOCK_OWNER_DIR=
   fi
   fm_lock_release "$steal"
@@ -1352,10 +1380,10 @@ _fm_lock_acquire_wait_handoff() {  # <lockdir> <caller-pid>
     ownerdir=$lockdir
   fi
   fm_current_pid current || { fm_lock_release "$lockdir"; return 1; }
-  back=$(cat "$ownerdir/pid" 2>/dev/null || true)
+  back=$(fm_read_file "$ownerdir/pid" 2>/dev/null || true)
   if [ "$back" != "$current" ] \
     || ! printf '%s\n' "$caller_pid" > "$ownerdir/pid" 2>/dev/null \
-    || [ "$(cat "$ownerdir/pid" 2>/dev/null || true)" != "$caller_pid" ]; then
+    || [ "$(fm_read_file "$ownerdir/pid" 2>/dev/null || true)" != "$caller_pid" ]; then
     fm_lock_release "$lockdir"
     return 1
   fi
@@ -1393,7 +1421,7 @@ fm_lock_acquire_wait_bounded() {
     rc=$?
   fi
 
-  owner_pid=$(cat "$lockdir/pid" 2>/dev/null || true)
+  owner_pid=$(fm_read_file "$lockdir/pid" 2>/dev/null || true)
   if [ "$owner_pid" = "$caller_pid" ]; then
     return 0
   fi
@@ -1405,7 +1433,7 @@ fm_lock_acquire_wait_bounded() {
     return 0
   fi
   if [ "$rc" -eq 124 ]; then
-    owner_pid=$(cat "$lockdir/pid" 2>/dev/null || true)
+    owner_pid=$(fm_read_file "$lockdir/pid" 2>/dev/null || true)
     case "$owner_pid" in
       ''|*[!0-9]*|0) ;;
       *)
@@ -1428,14 +1456,14 @@ fm_lock_release() {
   if [ -L "$lockdir" ]; then
     ownerdir=$(fm_lock_link_owner "$lockdir" 2>/dev/null || true)
     [ -n "$ownerdir" ] || return 0
-    pid=$(cat "$ownerdir/pid" 2>/dev/null || true)
+    pid=$(fm_read_file "$ownerdir/pid" 2>/dev/null || true)
     [ "$pid" = "$current" ] || return 0
     fm_lock_points_to_owner "$lockdir" "$ownerdir" || return 0
     rm -f "$lockdir" 2>/dev/null || return 0
     fm_lock_discard_owner "$ownerdir"
     return 0
   fi
-  pid=$(cat "$lockdir/pid" 2>/dev/null || true)
+  pid=$(fm_read_file "$lockdir/pid" 2>/dev/null || true)
   [ "$pid" = "$current" ] || return 0
   fm_lock_clean_known_files "$lockdir"
   rmdir "$lockdir" 2>/dev/null || true
@@ -1736,7 +1764,7 @@ fm_failure_episode_reset() {
       ;;
     held)
       fm_current_pid current || return 1
-      pid=$(cat "$lock/pid" 2>/dev/null || true)
+      pid=$(fm_read_file "$lock/pid" 2>/dev/null || true)
       [ "$pid" = "$current" ] || return 1
       ;;
     *) return 1 ;;
@@ -2080,11 +2108,11 @@ fm_autoarm_claim_abandoned() {  # <state-dir> [grace]
   [ -e "$lock" ] || [ -L "$lock" ] || return 1
   role=$(fm_lock_role "$lock")
   [ "$role" = autoarm ] || return 1
-  pid=$(cat "$lock/pid" 2>/dev/null || true)
+  pid=$(fm_read_file "$lock/pid" 2>/dev/null || true)
   case "$pid" in
     ''|*[!0-9]*) return 1 ;;
   esac
-  recorded=$(cat "$lock/pid-identity" 2>/dev/null || true)
+  recorded=$(fm_read_file "$lock/pid-identity" 2>/dev/null || true)
   if [ -n "$recorded" ] && current=$(fm_pid_identity "$pid" 2>/dev/null) \
     && [ -n "$current" ] && [ "$current" != "$recorded" ]; then
     return 0
@@ -2132,8 +2160,8 @@ fm_autoarm_release_abandoned() {  # <state-dir> [grace]
     fm_lock_release "$steal"
     return 1
   fi
-  lock_pid=$(cat "$lock/pid" 2>/dev/null || true)
-  recorded=$(cat "$lock/pid-identity" 2>/dev/null || true)
+  lock_pid=$(fm_read_file "$lock/pid" 2>/dev/null || true)
+  recorded=$(fm_read_file "$lock/pid-identity" 2>/dev/null || true)
   if [ -n "$recorded" ] && fm_pid_alive "$lock_pid" \
     && current=$(fm_pid_identity "$lock_pid" 2>/dev/null) \
     && [ -n "$current" ] && [ "$current" = "$recorded" ]; then
@@ -2212,7 +2240,7 @@ fm_wake_append_locked() {
 
   _fm_recovery_marker_publish "$recovery_marker" downtime "" append || status=$?
   if [ "$status" -eq 0 ]; then
-    seq=$(cat "$seq_file" 2>/dev/null || echo 0)
+    seq=$(fm_read_file "$seq_file" 2>/dev/null || echo 0)
     case "$seq" in
       ''|*[!0-9]*) seq=0 ;;
     esac
@@ -2322,7 +2350,7 @@ fm_wake_secondmate_stall_receipt_write() { # <task> <row-key>
     chmod 0700 "$task_dir" || return 1
   fi
   receipt="$task_dir/$row_key"
-  [ "$(cat "$receipt" 2>/dev/null || true)" != "$row_key" ] || return 0
+  [ "$(fm_read_file "$receipt" 2>/dev/null || true)" != "$row_key" ] || return 0
   tmp=$(mktemp "$task_dir/.receipt.XXXXXX") || return 1
   if ! printf '%s\n' "$row_key" > "$tmp" || ! chmod 0600 "$tmp" \
     || ! _fm_atomic_replace "$tmp" "$receipt"; then
@@ -2546,7 +2574,7 @@ fm_wake_signal_seen_size() {  # <state> <file>
       status_presentation_marker_offset "$marker" "$2"
       ;;
     *)
-      sig=$(cat "$marker" 2>/dev/null) || { printf '0'; return 0; }
+      sig=$(fm_read_file "$marker" 2>/dev/null) || { printf '0'; return 0; }
       case "$sig" in *:*) size=${sig%%:*} ;; *) size=0 ;; esac
       case "$size" in ''|*[!0-9]*) printf '0' ;; *) printf '%s' "$size" ;; esac
       ;;
@@ -2572,7 +2600,7 @@ fm_wake_signal_reported_current() {  # <state> <file>
       _fm_wake_require_classify || return 1
       status_presentation_marker_reported_matches "$marker" "$sig"
       ;;
-    *) [ "$(cat "$marker" 2>/dev/null)" = "$sig" ] ;;
+    *) [ "$(fm_read_file "$marker" 2>/dev/null)" = "$sig" ] ;;
   esac
 }
 

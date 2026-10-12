@@ -86,17 +86,60 @@ SH
     ': > "$3"' \
     'before=$(/bin/date +%s)' \
     'fm_epoch_seconds_to now' \
+    'clock=$(fm_epoch_seconds)' \
     'after=$(/bin/date +%s)' \
+    '[ "$clock" -ge "$before" ] && [ "$clock" -le "$after" ] || printf "stdout clock outside date bound\n"' \
     'case "$now" in ""|*[!0-9]*) printf "not epoch seconds: %q\n" "$now" ;; esac' \
     '[ "$now" -ge "$before" ] && [ "$now" -le "$after" ] || printf "%s outside [%s, %s]\n" "$now" "$before" "$after"' \
     'forks=$(grep -c . "$3" || true)' \
     'if [ "${BASH_VERSINFO[0]}" -gt 4 ] || { [ "${BASH_VERSINFO[0]}" -eq 4 ] && [ "${BASH_VERSINFO[1]}" -ge 2 ]; }; then' \
     '  [ "$forks" -eq 0 ] || printf "bash %s ran date %s times\n" "$BASH_VERSION" "$forks"' \
     'else' \
-    '  [ "$forks" -eq 1 ] || printf "bash %s ran date %s times, not exactly once\n" "$BASH_VERSION" "$forks"' \
+    '  [ "$forks" -eq 2 ] || printf "bash %s ran date %s times, not exactly twice\n" "$BASH_VERSION" "$forks"' \
     'fi' > "$script"
   run_everywhere "epoch helper" "$script" "$shim" "$log"
   pass "fm_epoch_seconds_to reads the clock like date +%s and forks date at most as often"
+}
+
+test_stdout_clock_seam_is_guarded_and_reads_without_programs() {
+  local script="$TMP_ROOT/clock-seam.sh" clock="$TMP_ROOT/test-clock"
+  local shim="$TMP_ROOT/clock-seam-shim" log="$TMP_ROOT/clock-seam.log" program
+  mkdir -p "$shim"
+  for program in cat date; do
+    cat > "$shim/$program" <<SHIM
+#!/bin/sh
+printf '%s\n' '$program' >> "$log"
+exec $(command -v "$program") "\$@"
+SHIM
+    chmod +x "$shim/$program"
+  done
+  cat > "$script" <<'SH'
+. "$1/bin/fm-wake-lib.sh"
+clock=$2
+printf '1000\n' > "$clock"
+FM_TEST_EPOCH_SECONDS_FILE=$clock
+FM_TEST_SEAM=
+before=$(/bin/date +%s)
+now=$(fm_epoch_seconds)
+after=$(/bin/date +%s)
+[ "$now" -ge "$before" ] && [ "$now" -le "$after" ] || printf 'unmarked test clock affected real time\n'
+PATH="$3:$PATH"
+: > "$4"
+FM_TEST_SEAM=1
+[ "$(fm_epoch_seconds)" = 1000 ] || printf 'marked clock did not read the first value\n'
+printf '2000\n' > "$clock"
+[ "$(fm_epoch_seconds)" = 2000 ] || printf 'marked clock cached stale time\n'
+[ ! -s "$4" ] || printf 'marked clock started cat or date\n'
+fm_epoch_seconds_to real
+[ "$real" -ge "$before" ] || printf 'stdout seam affected the real-time variable clock\n'
+printf 'bad\n' > "$clock"
+fm_epoch_seconds >/dev/null && printf 'malformed test clock accepted\n'
+rm "$clock"
+fm_epoch_seconds >/dev/null 2>&1 && printf 'missing test clock accepted\n'
+:
+SH
+  run_everywhere "stdout clock seam" "$script" "$clock" "$shim" "$log"
+  pass "the mutable stdout test clock requires the test marker and leaves the variable clock on real time"
 }
 
 test_signal_seen_path_and_lock_abs_path_are_unchanged() {
@@ -378,11 +421,293 @@ SH
   pass "fm_pr_file helpers resolve the kernel name once per process beside the wake library"
 }
 
+test_file_reader_matches_cat_without_starting_it() {
+  local script="$TMP_ROOT/read-file.sh" cases="$TMP_ROOT/read-cases" shim="$TMP_ROOT/read-shim" log="$TMP_ROOT/read.log"
+  mkdir -p "$cases" "$shim"
+  printf 'ordinary\n' > "$cases/ordinary"
+  printf '  spaces\tand tabs  \n\n' > "$cases/spaces"
+  printf 'unterminated' > "$cases/partial"
+  printf 'a\0b\n\0tail' > "$cases/nul"
+  : > "$cases/empty"
+  mkdir "$cases/directory"
+  ln -s ordinary "$cases/link"
+  cat > "$shim/cat" <<SHIM
+#!/bin/sh
+printf 'cat\n' >> "$log"
+exec /bin/cat "\$@"
+SHIM
+  chmod +x "$shim/cat"
+  cat > "$script" <<'CASE'
+. "$1/bin/fm-wake-lib.sh"
+PATH="$3:$PATH"
+: > "$4"
+for file in "$2"/* "$2/missing" /dev/null; do
+  { got=$(fm_read_file "$file" 2>/dev/null); got_rc=$?; } 2>/dev/null
+  { want=$(/bin/cat "$file" 2>/dev/null); want_rc=$?; } 2>/dev/null
+  [ "$got" = "$want" ] && [ "$got_rc" -eq "$want_rc" ] \
+    || printf 'file %q: helper %q/%s, cat %q/%s\n' "$file" "$got" "$got_rc" "$want" "$want_rc"
+done
+[ ! -s "$4" ] || printf 'file reader started cat\n'
+CASE
+  run_everywhere "complete file reader" "$script" "$cases" "$shim" "$log"
+  pass "fm_read_file matches cat substitutions, including NULs, missing files and directories, without starting cat"
+}
+
+test_current_pid_identifies_every_frame() {
+  local script="$TMP_ROOT/pid-frames.sh" shim="$TMP_ROOT/pid-shim" log="$TMP_ROOT/pid.log"
+  mkdir -p "$shim"
+  cat > "$shim/sh" <<SHIM
+#!/bin/sh
+printf 'sh\n' >> "$log"
+exec /bin/sh "\$@"
+SHIM
+  chmod +x "$shim/sh"
+  cat > "$script" <<'CASE'
+. "$1/bin/fm-wake-lib.sh"
+PATH="$2:$PATH"
+: > "$3"
+want=$(exec /bin/sh -c 'printf "%s" "$PPID"')
+for _ in 1 2 3 4 5; do
+  fm_current_pid got
+  [ "$got" = "$want" ] || printf 'parent pid %q, wanted %q\n' "$got" "$want"
+done
+calls=$(wc -l < "$3")
+expected=0
+[ "${BASH_VERSINFO[0]}" -ge 4 ] || expected=5
+[ "$calls" -eq "$expected" ] || printf 'parent started sh %s times, expected %s\n' "$calls" "$expected"
+parent=$got
+for _ in 1 2; do
+  (
+    want=$(exec /bin/sh -c 'printf "%s" "$PPID"')
+    for _ in 1 2 3; do
+      fm_current_pid got
+      [ "$got" = "$want" ] && [ "$got" != "$parent" ] || printf 'child pid %q, wanted %q, parent %q\n' "$got" "$want" "$parent"
+    done
+    child=$got
+    (
+      want=$(exec /bin/sh -c 'printf "%s" "$PPID"')
+      fm_current_pid got
+      [ "$got" = "$want" ] && [ "$got" != "$child" ] || printf 'nested pid %q, wanted %q, inherited %q\n' "$got" "$want" "$child"
+    )
+  )
+done
+fm_current_pid got
+[ "$got" = "$parent" ] || printf 'child changed parent pid\n'
+check_fork_pid() {
+  local want got
+  want=$(exec /bin/sh -c 'printf "%s" "$PPID"')
+  fm_current_pid got
+  [ "$got" = "$want" ] && [ "$got" != "$parent" ] || printf 'fork pid %q, wanted %q, parent %q\n' "$got" "$want" "$parent"
+  fm_current_pid
+  want=$(exec /bin/sh -c 'printf "%s" "$PPID"')
+  printf '%s\n' "$want"
+}
+for direction in input output pipeline background substitution; do
+  case "$direction" in
+    input) cat < <(check_fork_pid) > "$3.frames" ;;
+    output) output=$(: > >(check_fork_pid)); printf '%s\n' "$output" > "$3.frames" ;;
+    pipeline) check_fork_pid | cat > "$3.frames" ;;
+    background) check_fork_pid > "$3.frames" & wait ;;
+    substitution) output=$(check_fork_pid); printf '%s\n' "$output" > "$3.frames" ;;
+  esac
+  { IFS= read -r got; IFS= read -r want; } < "$3.frames"
+  [ "$got" = "$want" ] && [ "$got" != "$parent" ] || printf '%s stdout pid %q, wanted %q, parent %q\n' "$direction" "$got" "$want" "$parent"
+done
+fm_lock_acquire_wait "$STATE/parent.lock" || exit 1
+parent_owner=$FM_LOCK_OWNER_DIR
+while IFS= read -r mismatch; do
+  printf '%s\n' "$mismatch"
+done < <(
+  want=$(exec /bin/sh -c 'printf "%s" "$PPID"')
+  fm_lock_acquire_wait "$STATE/child.lock" || { printf 'child could not acquire its lock\n'; exit 1; }
+  recorded=$(fm_read_file "$STATE/child.lock/pid")
+  [ "$recorded" = "$want" ] && [ "$recorded" != "$parent" ] || printf 'child lock pid %q, wanted %q\n' "$recorded" "$want"
+  fm_lock_release "$STATE/child.lock"
+  [ ! -e "$STATE/child.lock" ] || printf 'child could not release its lock\n'
+  fm_lock_set_role "$STATE/parent.lock" autoarm && printf 'child changed parent lock role\n'
+  fm_lock_release "$STATE/parent.lock"
+  [ -e "$STATE/parent.lock" ] || printf 'child released parent lock\n'
+  for acquire in fm_lock_try_acquire fm_lock_try_acquire_steal_mutex; do
+    if "$acquire" "$STATE/parent.lock"; then
+      printf '%s acquired parent-held lock\n' "$acquire"
+    fi
+  done
+  [ "$(fm_read_file "$STATE/parent.lock/pid")" = "$parent" ] || printf 'child changed parent lock pid\n'
+  exit 0
+)
+fm_lock_points_to_owner "$STATE/parent.lock" "$parent_owner" || printf 'child replaced parent lock owner\n'
+fm_lock_set_role "$STATE/parent.lock" autoarm || printf 'parent could not set its lock role\n'
+fm_lock_try_acquire "$STATE/parent.lock" || printf 'parent could not reclaim its own lock\n'
+fm_lock_release "$STATE/parent.lock"
+[ ! -e "$STATE/parent.lock" ] || printf 'parent could not release its lock\n'
+(
+  unset BASHPID BASH_SUBSHELL
+  (
+    want=$(exec /bin/sh -c 'printf "%s" "$PPID"')
+    fm_current_pid got
+    [ "$got" = "$want" ] || printf 'missing Bash properties inherited a parent pid\n'
+  )
+)
+CASE
+  run_everywhere "frame pid identity and lock ownership" "$script" "$shim" "$log"
+  pass "fm_current_pid preserves fresh identities and lock ownership across every fork form"
+}
+
+test_wake_source_reuses_initialization() {
+  local script="$TMP_ROOT/source-cache.sh" shim="$TMP_ROOT/source-shim" log="$TMP_ROOT/source.log"
+  mkdir -p "$shim"
+  local program
+  for program in uname mkdir; do
+    cat > "$shim/$program" <<SHIM
+#!/bin/sh
+printf '%s\n' '$program' >> "$log"
+exec $(command -v "$program") "\$@"
+SHIM
+    chmod +x "$shim/$program"
+  done
+  cat > "$script" <<'CASE'
+PATH="$2:$PATH"
+. "$1/bin/fm-wake-lib.sh"
+: > "$3"
+for _ in 1 2 3; do . "$1/bin/fm-wake-lib.sh"; done
+[ ! -s "$3" ] || printf 're-sourcing wake library repeated uname or mkdir\n'
+rm -rf "$4/new-state"
+FM_STATE_OVERRIDE="$4/new-state"
+. "$1/bin/fm-wake-lib.sh"
+[ -d "$FM_STATE_OVERRIDE" ] || printf 'changed state root was not created\n'
+[ "$(cat "$3")" = mkdir ] || printf 'changed state root did not start exactly one mkdir\n'
+CASE
+  run_everywhere "wake source reuse" "$script" "$shim" "$log" "$TMP_ROOT"
+  pass "re-sourcing wake helpers reuses the OS and existing directory while creating a changed state root"
+}
+
+test_batched_stat_preserves_private_directory_identity() {
+  local script="$TMP_ROOT/stat-batch.sh" dir="$TMP_ROOT/private-stat" log="$TMP_ROOT/stat.log"
+  mkdir -m 700 "$dir"
+  ln -s "$dir" "$dir.link"
+  cat > "$script" <<'CASE'
+. "$1/bin/fm-wake-lib.sh"
+. "$1/bin/fm-pr-lib.sh"
+. "$1/bin/fm-procevent-lib.sh"
+log=$3
+: > "$log"
+set -T
+trap 'case "$BASH_COMMAND" in /usr/bin/stat\ *|stat\ *) printf "stat\n" >> "$log" ;; esac' DEBUG
+identity=$(fm_pr_file_identity "$2") || printf 'identity failed\n'
+attributes=$(fm_pr_file_attributes "$2") || printf 'attributes failed\n'
+owner_identity=$(fm_procevent_claim_state_root_identity "$2") || printf 'owner identity failed\n'
+calls=$(wc -l < "$log")
+[ "$calls" -eq 3 ] || printf 'three batched queries started stat %s times\n' "$calls"
+trap - DEBUG
+want="$(fm_pr_file_device "$2"):$(fm_pr_file_inode "$2")"
+[ "$identity" = "$want" ] || printf 'identity %q, wanted %q\n' "$identity" "$want"
+want="$(fm_pr_file_device "$2") $(fm_pr_file_inode "$2") $EUID $(fm_pr_file_mode "$2")"
+[ "$attributes" = "$want" ] || printf 'attributes %q, wanted %q\n' "$attributes" "$want"
+canonical=$(cd -P "$2" && pwd -P)
+want=$(printf '%s\t%s\t%s\t%s\t%s' "$canonical" "$(fm_pr_file_device "$2")" "$(fm_pr_file_inode "$2")" "$EUID" "$(fm_pr_file_mode "$2")")
+[ "$owner_identity" = "$want" ] || printf 'owner identity %q, wanted %q\n' "$owner_identity" "$want"
+( IFS=$'\t'; [ "$(fm_procevent_claim_state_root_identity "$2")" = "$owner_identity" ] ) \
+  || printf 'ambient IFS changed owner identity\n'
+[ "$(fm_procevent_claim_state_root_identity "$2.link")" = "$owner_identity" ] || printf 'symlink spelling changed physical identity\n'
+fm_procevent_private_directory_identity "$2.link" 0 >/dev/null && printf 'direct symlink private directory accepted\n'
+chmod 755 "$2"
+fm_procevent_private_directory_identity "$2" 1 >/dev/null && printf 'non-700 exact directory accepted\n'
+fm_procevent_private_directory_identity "$2" 0 >/dev/null || printf 'private 755 directory rejected\n'
+chmod 777 "$2"
+fm_procevent_claim_state_root_identity "$2" >/dev/null && printf 'writable owner root accepted\n'
+chmod 700 "$2"
+CASE
+  run_everywhere "batched stat" "$script" "$dir" "$log"
+  pass "batched stat returns identical file and owner-root identities with one stat per snapshot and preserves private-directory refusals"
+}
+
+test_owner_lease_touch_reuses_its_clock_process() {
+  local script="$TMP_ROOT/lease-touch.sh" state="$TMP_ROOT/lease-state" shim="$TMP_ROOT/lease-shim" log="$TMP_ROOT/lease.log"
+  mkdir -p "$state/procevent" "$shim"
+  local program
+  for program in perl mktemp mv; do
+    cat > "$shim/$program" <<SHIM
+#!/bin/sh
+printf '%s\n' '$program' >> "$log"
+exec $(command -v "$program") "\$@"
+SHIM
+    chmod +x "$shim/$program"
+  done
+  cat > "$script" <<'CASE'
+. "$1/bin/fm-wake-lib.sh"
+. "$1/bin/fm-pr-lib.sh"
+. "$1/bin/fm-procevent-lib.sh"
+PATH="$3:$PATH"
+: > "$4"
+fm_procevent_owner_lease_touch "$2" || printf 'lease touch failed\n'
+[ "$(cat "$4")" = perl ] || printf 'lease refresh did not use exactly one Perl process\n'
+lease="$2/procevent/.owner-lease"
+[ "$(fm_pr_file_mode "$lease")" = 600 ] || printf 'lease mode is not 600\n'
+[ "$(fm_procevent_owner_lease_age "$2")" -le 1 ] || printf 'new lease is not fresh\n'
+for file in "$2/procevent"/.owner-lease.*; do
+  [ ! -e "$file" ] || printf 'refresh left temporary lease %q\n' "$file"
+done
+before=$(fm_read_file "$lease")
+fm_procevent_owner_lease_touch "$2" || printf 'second refresh failed\n'
+after=$(fm_read_file "$lease")
+[ "$before" != "$after" ] || printf 'refresh did not advance monotonic clock\n'
+CASE
+  run_everywhere "lease process reuse" "$script" "$state" "$shim" "$log"
+  pass "owner lease refresh reads the monotonic clock and atomically publishes a private file in one Perl process"
+}
+
+test_meta_values_matches_pipeline_without_programs() {
+  local script="$TMP_ROOT/meta-values.sh" meta="$TMP_ROOT/values.meta" shim="$TMP_ROOT/values-shim" log="$TMP_ROOT/values.log"
+  mkdir -p "$shim"
+  printf 'harness=claude\nharness=\n harness=ignored\nbackend=tmux\nharness=a=b\nharness= tabs\tand spaces \nharness=unterminated' > "$meta"
+  local program
+  for program in grep cut tr; do
+    cat > "$shim/$program" <<SHIM
+#!/bin/sh
+printf '%s\n' '$program' >> "$log"
+exec $(command -v "$program") "\$@"
+SHIM
+    chmod +x "$shim/$program"
+  done
+  cat > "$script" <<'CASE'
+. "$1/bin/fm-backend.sh"
+. "$1/bin/fm-watch.sh"
+printf '%s\nwindow=fm-values\n' "$(<"$2")" > "$STATE/values.meta"
+PATH="$3:$PATH"
+for key in harness backend kind; do
+  want=$(grep "^$key=" "$2" | cut -d= -f2- || true)
+  : > "$4"
+  got=$(fm_meta_values "$2" "$key")
+  [ "$got" = "$want" ] || printf 'metadata %s differs: %q, expected %q\n' "$key" "$got" "$want"
+  [ ! -s "$4" ] || printf 'metadata reader started a program\n'
+done
+[ -z "$(fm_meta_values "$2.missing" harness)" ] || printf 'missing metadata not empty\n'
+want=$(grep '^harness=' "$2" | cut -d= -f2- || true)
+: > "$4"
+[ "$(window_harness fm-values)" = "$want" ] || printf 'watcher harness values changed\n'
+[ "$(window_backend fm-values)" = tmux ] || printf 'watcher backend changed\n'
+[ "$(window_kind fm-values)" = ship ] || printf 'watcher default kind changed\n'
+[ "$(window_backend missing)" = tmux ] || printf 'missing window backend changed\n'
+[ "$(window_kind missing)" = unknown ] || printf 'missing window kind changed\n'
+[ ! -s "$4" ] || printf 'watcher metadata queries started grep/cut/tr\n'
+for pgid in ' 123 ' $'\t123\n' '' $'1\t2 3\r'; do
+  want=$(printf '%s' "$pgid" | tr -d '[:space:]')
+  : > "$4"
+  got=${pgid//[[:space:]]/}
+  [ "$got" = "$want" ] || printf 'process group whitespace differs\n'
+  [ ! -s "$4" ] || printf 'process group trim started a program\n'
+done
+CASE
+  run_everywhere "metadata values and process group whitespace" "$script" "$meta" "$shim" "$log"
+  pass "metadata values preserve duplicate, empty and unterminated fields without grep/cut; process group whitespace needs no tr"
+}
+
 if [ -n "${FM_TEST_ONLY:-}" ]; then
   "$FM_TEST_ONLY"
 else
   test_path_helpers_match_dirname_and_basename
   test_epoch_helper_matches_date_and_never_forks_more
+  test_stdout_clock_seam_is_guarded_and_reads_without_programs
   test_signal_seen_path_and_lock_abs_path_are_unchanged
   test_recovery_marker_read_accepts_exactly_one_newline
   test_window_to_task_matches_the_meta_pipeline
@@ -391,4 +716,10 @@ else
   test_sleep_helper_survives_a_trap_that_exits_mid_wait
   test_identity_helpers_match_the_pipelines_they_replace
   test_pr_file_helpers_read_the_kernel_name_once
+  test_file_reader_matches_cat_without_starting_it
+  test_current_pid_identifies_every_frame
+  test_wake_source_reuses_initialization
+  test_batched_stat_preserves_private_directory_identity
+  test_owner_lease_touch_reuses_its_clock_process
+  test_meta_values_matches_pipeline_without_programs
 fi

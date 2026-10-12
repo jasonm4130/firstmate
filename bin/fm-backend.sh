@@ -48,7 +48,7 @@
 # on their own for on-demand reads (fm-peek.sh, fm-crew-state.sh).
 
 FM_BACKEND_SCRIPT=${BASH_SOURCE[0]:-$0}
-FM_BACKEND_LIB_DIR="$(cd "$(dirname "$FM_BACKEND_SCRIPT")" && pwd)"
+FM_BACKEND_LIB_DIR="$(d=${FM_BACKEND_SCRIPT%/*}; [ "$d" != "$FM_BACKEND_SCRIPT" ] || d=.; cd "${d:-/}" && pwd)"
 unset FM_BACKEND_SCRIPT
 FM_BACKEND_DEFAULT_ROOT="$(cd "$FM_BACKEND_LIB_DIR/.." && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-${FM_ROOT:-$FM_BACKEND_DEFAULT_ROOT}}"
@@ -341,6 +341,18 @@ fm_meta_get() {  # <meta-file> <key>
     esac
   done < "$meta" 2>/dev/null || true
   printf '%s' "$value"
+}
+
+# Every matching value, preserving the watcher metadata pipeline's treatment
+# of duplicate fields rather than silently selecting one of them.
+fm_meta_values() {  # <meta-file> <key>
+  local meta=$1 key=$2 line
+  [ -f "$meta" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      "$key="*) printf '%s\n' "${line#*=}" ;;
+    esac
+  done < "$meta" 2>/dev/null || true
 }
 
 # fm_backend_of_meta: the backend recorded in <meta-file>, defaulting to
