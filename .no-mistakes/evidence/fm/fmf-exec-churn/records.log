@@ -1,0 +1,8 @@
+recorded harness values: $'claude\n\na=b\nunterminated'
+read value: $' spaces\tand\\slashes\nlast unterminated'
+child=10839 parent=10745 parent lock retained
+PASS: recorded values retained and child cannot take the parent lock
+recorded harness values: $'claude\n\na=b\nunterminated'
+read value: $' spaces\tand\\slashes\nlast unterminated'
+child=11015 parent=10689 parent lock retained
+PASS: recorded values retained and child cannot take the parent lock

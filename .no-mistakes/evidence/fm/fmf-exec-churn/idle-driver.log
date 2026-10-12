@@ -1,0 +1,69 @@
+{
+  "base-path": {
+    "sample_seconds": 35,
+    "requested_starts": 81,
+    "starts_per_second": 2.3142857142857145,
+    "programs": {
+      "cat": 31,
+      "dirname": 2,
+      "ln": 8,
+      "mkdir": 6,
+      "mktemp": 10,
+      "rm": 16,
+      "uname": 8
+    },
+    "beacon_exists": true,
+    "checkpoint_exit": 124,
+    "lock_released": true
+  },
+  "head-path": {
+    "sample_seconds": 35,
+    "requested_starts": 30,
+    "starts_per_second": 0.8571428571428571,
+    "programs": {
+      "dirname": 3,
+      "ln": 6,
+      "mktemp": 6,
+      "rm": 12,
+      "uname": 3
+    },
+    "beacon_exists": true,
+    "checkpoint_exit": 124,
+    "lock_released": true
+  },
+  "base-stock": {
+    "sample_seconds": 35,
+    "requested_starts": 86,
+    "starts_per_second": 2.4571428571428573,
+    "programs": {
+      "cat": 24,
+      "dirname": 2,
+      "ln": 6,
+      "mkdir": 6,
+      "mktemp": 8,
+      "rm": 14,
+      "sh": 18,
+      "uname": 8
+    },
+    "beacon_exists": true,
+    "checkpoint_exit": 124,
+    "lock_released": true
+  },
+  "head-stock": {
+    "sample_seconds": 35,
+    "requested_starts": 48,
+    "starts_per_second": 1.3714285714285714,
+    "programs": {
+      "dirname": 3,
+      "ln": 6,
+      "mktemp": 6,
+      "rm": 12,
+      "sh": 18,
+      "uname": 3
+    },
+    "beacon_exists": true,
+    "checkpoint_exit": 124,
+    "lock_released": true
+  }
+}
+PASS: real idle monitors reduced requested starts on both Bash versions, kept beacons, and released locks at timeout

@@ -1,0 +1,29 @@
+=== registered custom check delivered by real monitor ===
+registered: state/live.check.sh
+check: /Users/jasonmatthew/.no-mistakes/worktrees/c74340c6863b/01M4QZBQAEBS6KP11FKDPYAMA8/.test-disposable/scenario.lmm0MM/state/live.check.sh: live check delivered
+1791809503	1	check	/Users/jasonmatthew/.no-mistakes/worktrees/c74340c6863b/01M4QZBQAEBS6KP11FKDPYAMA8/.test-disposable/scenario.lmm0MM/state/live.check.sh	check: /Users/jasonmatthew/.no-mistakes/worktrees/c74340c6863b/01M4QZBQAEBS6KP11FKDPYAMA8/.test-disposable/scenario.lmm0MM/state/live.check.sh: live check delivered
+WAKE_ACK_REQUIRED: after handling completes run bin/fm-wake-drain.sh --ack-through 1 --recovery-generation 59291.1791809503.xJvvvH
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  WATCHER DOWN - SUPERVISION IS OFF
+●  1 registered custom check(s), but no live watcher process holds this home lock (last beat: 2s ago).
+●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair.
+●  This is a supervision warning only; the guarded operation WILL still run.
+●  After draining queued wakes, repair missing watcher supervision with a foreground checkpoint: bin/fm-watch-checkpoint.sh --seconds 180.
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+WARNING: queued wakes pending - drain them with bin/fm-wake-drain.sh before anything else.
+=== status notification at production poll and grace ===
+signal: /Users/jasonmatthew/.no-mistakes/worktrees/c74340c6863b/01M4QZBQAEBS6KP11FKDPYAMA8/.test-disposable/scenario.lmm0MM/state/demo.status
+1791809503	1	check	/Users/jasonmatthew/.no-mistakes/worktrees/c74340c6863b/01M4QZBQAEBS6KP11FKDPYAMA8/.test-disposable/scenario.lmm0MM/state/live.check.sh	check: /Users/jasonmatthew/.no-mistakes/worktrees/c74340c6863b/01M4QZBQAEBS6KP11FKDPYAMA8/.test-disposable/scenario.lmm0MM/state/live.check.sh: live check delivered
+1791809535	3	signal	demo.status	signal: /Users/jasonmatthew/.no-mistakes/worktrees/c74340c6863b/01M4QZBQAEBS6KP11FKDPYAMA8/.test-disposable/scenario.lmm0MM/state/demo.status
+WAKE_ACK_REQUIRED: after handling completes run bin/fm-wake-drain.sh --ack-through 3 --recovery-generation 59291.1791809503.xJvvvH
+wake annotation: latest wake-EVENT observed at drain, not current state: demo.status: done: disposable end-to-end notification
+STATUS OUTCOME BACKSTOP (newest captain-facing task event has no covering branch outcome):
+demo done: disposable end-to-end notification
+=== quiet reconciliation then reject unsafe outcome-directory replacement ===
+PASS: unsafe outcome-directory replacement rejected
+=== fresh private identities and monotonic leases ===
+before=/Users/jasonmatthew/.no-mistakes/worktrees/c74340c6863b/01M4QZBQAEBS6KP11FKDPYAMA8/.test-disposable/scenario.lmm0MM/private	16777232	64336432	501	700
+after=/Users/jasonmatthew/.no-mistakes/worktrees/c74340c6863b/01M4QZBQAEBS6KP11FKDPYAMA8/.test-disposable/scenario.lmm0MM/private	16777232	64336433	501	700
+PASS: writable private directory rejected
+lease-before=3988596.943988 lease-after=3988596.976594 mode=600 age=0
+PASS: real monitoring, notifications, reconciliation, identities and lease publication

@@ -1,0 +1,17 @@
+ok - fm_dirname_to and fm_basename_to match dirname and basename on every edge case
+ok - fm_epoch_seconds_to reads the clock like date +%s and forks date at most as often
+ok - the mutable stdout test clock requires the test marker and leaves the variable clock on real time
+ok - signal seen paths and absolute lock paths are byte-identical to the dirname/basename/tr forms
+ok - recovery marker reads accept exactly the one-line records wc -l accepted
+ok - window_to_task resolves every recorded window exactly as the grep/tail/cut pipeline did
+ok - classify stat helpers resolve the kernel name once per process
+ok - fm_sleep waits its full time inside bash, and falls back to sleep without a usable FIFO
+ok - a trap that exits during fm_sleep leaves its EXIT trap free to finish
+ok - fm_pid_identity and _fm_engine_identity match the sed and tr pipelines they replace
+ok - fm_pr_file helpers resolve the kernel name once per process beside the wake library
+ok - fm_read_file matches cat substitutions, including NULs, missing files and directories, without starting cat
+ok - fm_current_pid preserves fresh identities and lock ownership across every fork form
+ok - re-sourcing wake helpers reuses the OS and existing directory while creating a changed state root
+ok - batched stat returns identical file and owner-root identities with one stat per snapshot and preserves private-directory refusals
+ok - owner lease refresh reads the monotonic clock and atomically publishes a private file in one Perl process
+ok - metadata values preserve duplicate, empty and unterminated fields without grep/cut; process group whitespace needs no tr
