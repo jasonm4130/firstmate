@@ -1,1 +1,2 @@
 not ok - teardown exited non-zero with a valid tasktmp
+pre-fix exit=1
