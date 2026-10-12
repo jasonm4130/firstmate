@@ -448,20 +448,13 @@ for file in "$2"/* "$2/missing" /dev/null; do
     || printf 'file %q: helper %q/%s, cat %q/%s\n' "$file" "$got" "$got_rc" "$want" "$want_rc"
 done
 [ ! -s "$4" ] || printf 'file reader started cat\n'
-for argument in - -n; do
-  got=$(printf 'stdin value\n' | fm_read_file "$argument"); got_rc=$?
-  want=$(printf 'stdin value\n' | /bin/cat "$argument"); want_rc=$?
-  [ "$got" = "$want" ] && [ "$got_rc" -eq "$want_rc" ] \
-    || printf 'dash argument %q changed cat behavior\n' "$argument"
-done
-[ "$(wc -l < "$4")" -eq 2 ] || printf 'dash arguments did not use the cat fallback\n'
 CASE
   run_everywhere "complete file reader" "$script" "$cases" "$shim" "$log"
   pass "fm_read_file matches cat substitutions, including NULs, missing files and directories, without starting cat"
 }
 
-test_current_pid_reuses_only_its_own_frame() {
-  local script="$TMP_ROOT/pid-cache.sh" shim="$TMP_ROOT/pid-shim" log="$TMP_ROOT/pid.log"
+test_current_pid_identifies_every_frame() {
+  local script="$TMP_ROOT/pid-frames.sh" shim="$TMP_ROOT/pid-shim" log="$TMP_ROOT/pid.log"
   mkdir -p "$shim"
   cat > "$shim/sh" <<SHIM
 #!/bin/sh
@@ -480,7 +473,7 @@ for _ in 1 2 3 4 5; do
 done
 calls=$(wc -l < "$3")
 expected=0
-[ "${BASH_VERSINFO[0]}" -ge 4 ] || expected=1
+[ "${BASH_VERSINFO[0]}" -ge 4 ] || expected=5
 [ "$calls" -eq "$expected" ] || printf 'parent started sh %s times, expected %s\n' "$calls" "$expected"
 parent=$got
 for _ in 1 2; do
@@ -499,19 +492,65 @@ for _ in 1 2; do
   )
 done
 fm_current_pid got
-[ "$got" = "$parent" ] || printf 'child cache changed parent pid\n'
-# Without Bash's frame-depth property, retain the original per-call probe.
+[ "$got" = "$parent" ] || printf 'child changed parent pid\n'
+check_fork_pid() {
+  local want got
+  want=$(exec /bin/sh -c 'printf "%s" "$PPID"')
+  fm_current_pid got
+  [ "$got" = "$want" ] && [ "$got" != "$parent" ] || printf 'fork pid %q, wanted %q, parent %q\n' "$got" "$want" "$parent"
+  fm_current_pid
+  want=$(exec /bin/sh -c 'printf "%s" "$PPID"')
+  printf '%s\n' "$want"
+}
+for direction in input output pipeline background substitution; do
+  case "$direction" in
+    input) cat < <(check_fork_pid) > "$3.frames" ;;
+    output) output=$(: > >(check_fork_pid)); printf '%s\n' "$output" > "$3.frames" ;;
+    pipeline) check_fork_pid | cat > "$3.frames" ;;
+    background) check_fork_pid > "$3.frames" & wait ;;
+    substitution) output=$(check_fork_pid); printf '%s\n' "$output" > "$3.frames" ;;
+  esac
+  { IFS= read -r got; IFS= read -r want; } < "$3.frames"
+  [ "$got" = "$want" ] && [ "$got" != "$parent" ] || printf '%s stdout pid %q, wanted %q, parent %q\n' "$direction" "$got" "$want" "$parent"
+done
+fm_lock_acquire_wait "$STATE/parent.lock" || exit 1
+parent_owner=$FM_LOCK_OWNER_DIR
+while IFS= read -r mismatch; do
+  printf '%s\n' "$mismatch"
+done < <(
+  want=$(exec /bin/sh -c 'printf "%s" "$PPID"')
+  fm_lock_acquire_wait "$STATE/child.lock" || { printf 'child could not acquire its lock\n'; exit 1; }
+  recorded=$(fm_read_file "$STATE/child.lock/pid")
+  [ "$recorded" = "$want" ] && [ "$recorded" != "$parent" ] || printf 'child lock pid %q, wanted %q\n' "$recorded" "$want"
+  fm_lock_release "$STATE/child.lock"
+  [ ! -e "$STATE/child.lock" ] || printf 'child could not release its lock\n'
+  fm_lock_set_role "$STATE/parent.lock" autoarm && printf 'child changed parent lock role\n'
+  fm_lock_release "$STATE/parent.lock"
+  [ -e "$STATE/parent.lock" ] || printf 'child released parent lock\n'
+  for acquire in fm_lock_try_acquire fm_lock_try_acquire_steal_mutex; do
+    if "$acquire" "$STATE/parent.lock"; then
+      printf '%s acquired parent-held lock\n' "$acquire"
+    fi
+  done
+  [ "$(fm_read_file "$STATE/parent.lock/pid")" = "$parent" ] || printf 'child changed parent lock pid\n'
+  exit 0
+)
+fm_lock_points_to_owner "$STATE/parent.lock" "$parent_owner" || printf 'child replaced parent lock owner\n'
+fm_lock_set_role "$STATE/parent.lock" autoarm || printf 'parent could not set its lock role\n'
+fm_lock_try_acquire "$STATE/parent.lock" || printf 'parent could not reclaim its own lock\n'
+fm_lock_release "$STATE/parent.lock"
+[ ! -e "$STATE/parent.lock" ] || printf 'parent could not release its lock\n'
 (
   unset BASHPID BASH_SUBSHELL
   (
     want=$(exec /bin/sh -c 'printf "%s" "$PPID"')
     fm_current_pid got
-    [ "$got" = "$want" ] || printf 'missing frame-depth property inherited a parent pid\n'
+    [ "$got" = "$want" ] || printf 'missing Bash properties inherited a parent pid\n'
   )
 )
 CASE
-  run_everywhere "frame pid cache" "$script" "$shim" "$log"
-  pass "fm_current_pid reuses a Bash 3.2 frame's pid without inheriting it into sibling or nested children"
+  run_everywhere "frame pid identity and lock ownership" "$script" "$shim" "$log"
+  pass "fm_current_pid preserves fresh identities and lock ownership across every fork form"
 }
 
 test_wake_source_reuses_initialization() {
@@ -678,7 +717,7 @@ else
   test_identity_helpers_match_the_pipelines_they_replace
   test_pr_file_helpers_read_the_kernel_name_once
   test_file_reader_matches_cat_without_starting_it
-  test_current_pid_reuses_only_its_own_frame
+  test_current_pid_identifies_every_frame
   test_wake_source_reuses_initialization
   test_batched_stat_preserves_private_directory_identity
   test_owner_lease_touch_reuses_its_clock_process

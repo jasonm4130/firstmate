@@ -38,20 +38,11 @@ _fm_wake_require_timeout() {
 # Pass a variable name to capture this frame's pid without forking it in $().
 # On Bash 3.2, exec a child shell so its PPID identifies this frame, unlike $$.
 fm_current_pid() {  # [output-variable]
-  local fm_pid fm_depth
+  local fm_pid
   if [ -n "${BASHPID:-}" ]; then
     fm_pid=$BASHPID
   else
-    # Bash 3.2 lacks BASHPID. A fork increments BASH_SUBSHELL, so a value
-    # captured in this frame can be reused but never inherited as a child's pid.
-    fm_depth=${BASH_SUBSHELL-}
-    if [ -n "$fm_depth" ] && [ "${_FM_CURRENT_PID_DEPTH:-}" = "$fm_depth" ]; then
-      fm_pid=${_FM_CURRENT_PID_VALUE:-}
-    else
-      fm_pid=$(exec sh -c 'printf "%s\n" "$PPID"') || return 1
-      _FM_CURRENT_PID_DEPTH=$fm_depth
-      _FM_CURRENT_PID_VALUE=$fm_pid
-    fi
+    fm_pid=$(exec sh -c 'printf "%s\n" "$PPID"') || return 1
   fi
   case "$fm_pid" in ''|*[!0-9]*|0) return 1 ;; esac
   if [ "$#" -gt 0 ]; then
@@ -138,9 +129,6 @@ fm_sleep() {  # <seconds>
 # lines; callers still decide how to parse the complete contents.
 fm_read_file() {  # <path>
   local content
-  # Preserve cat's stdin/option behavior for a dash-prefixed argument. Hot
-  # paths pass ordinary file names, which use only Bash's reader below.
-  case "$1" in -*) cat "$1"; return ;; esac
   [ ! -d "$1" ] || return 1
   content=$(<"$1") || return 1
   printf '%s' "$content"
