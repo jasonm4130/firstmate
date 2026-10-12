@@ -57,6 +57,52 @@ else
   fm_epoch_seconds_to() { printf -v "$1" '%s' "$(date +%s)"; }
 fi
 
+# Process-start-free stand-in for `sleep` in polling loops, which endpoint
+# security agents otherwise inspect on every iteration. A loop's owning process
+# calls fm_sleep_open once; fm_sleep then waits in read -t on a private FIFO held
+# open read-write, which never delivers data or EOF, so the wait ends at its
+# timeout, and a trapped signal runs its handler at once rather than after the
+# wait. It runs sleep instead with no open FIFO, for a value read -t cannot take,
+# and for a fractional wait on Bash 3.2, whose read -t takes whole seconds. A
+# FIFO read that ends early drops the FIFO for the rest of the process, so a
+# broken descriptor can never turn a loop into a spin.
+fm_sleep_open() {
+  local dir
+  [ -z "${FM_SLEEP_FD:-}" ] || return 0
+  dir=$(mktemp -d "${TMPDIR:-/tmp}/fm-sleep.XXXXXX" 2>/dev/null) || return 0
+  if mkfifo "$dir/fifo" 2>/dev/null && exec 19<>"$dir/fifo"; then
+    FM_SLEEP_FD=19
+  fi
+  rm -rf -- "$dir"
+}
+
+fm_sleep() {  # <seconds>
+  local line start rc=0
+  case "$1" in
+    ''|*[!0-9.]*|.*|*.|*.*.*) sleep "$1"; return ;;
+    *[1-9]*) ;;
+    *) return 0 ;;
+  esac
+  if [ -n "${FM_SLEEP_FD:-}" ]; then
+    if [ "${BASH_VERSINFO[0]}" -ge 4 ]; then
+      read -r -t "$1" -u "$FM_SLEEP_FD" line 2>/dev/null || rc=$?
+      [ "$rc" -le 128 ] || return 0
+      FM_SLEEP_FD=
+    else
+      case "$1" in
+        *.*) ;;
+        *)
+          start=$SECONDS
+          read -r -t "$1" -u "$FM_SLEEP_FD" line 2>/dev/null || rc=$?
+          [ $((SECONDS - start)) -lt "$1" ] || return 0
+          FM_SLEEP_FD=
+          ;;
+      esac
+    fi
+  fi
+  sleep "$1"
+}
+
 fm_pid_alive() {
   local pid=$1
   case "$pid" in
@@ -104,7 +150,10 @@ fm_pid_identity() {
   # same width for the same reason.
   out=$(COLUMNS=10000 LC_ALL=C ps -p "$pid" -o lstart= -o command= 2>/dev/null) || return 1
   [ -n "$out" ] || return 1
-  printf '%s\n' "$out" | sed 's/^[[:space:]]*//'
+  case "$out" in
+    *$'\n'*) printf '%s\n' "$out" | sed 's/^[[:space:]]*//' ;;
+    *) printf '%s\n' "${out#"${out%%[![:space:]]*}"}" ;;
+  esac
 }
 
 fm_path_mtime() {

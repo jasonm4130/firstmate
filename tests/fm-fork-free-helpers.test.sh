@@ -225,6 +225,141 @@ SH
   pass "classify stat helpers resolve the kernel name once per process"
 }
 
+# A logging stand-in for sleep, so a case can count how often a wait started it.
+make_sleep_shim() {  # <shim-dir> <log>
+  mkdir -p "$1"
+  cat > "$1/sleep" <<SH
+#!/bin/sh
+printf 'sleep\n' >> "$2"
+exec $(command -v sleep) "\$@"
+SH
+  chmod +x "$1/sleep"
+}
+
+# The shared preamble of the fm_sleep cases: a sub-second clock that does not
+# go through the sleep shim, an elapsed-time check, and a sleep-start counter.
+# shellcheck disable=SC2016 # Expanded by each case's child shell.
+SLEEP_CASE_PREAMBLE='. "$1/bin/fm-wake-lib.sh"
+PATH="$2:$PATH"
+log=$3
+: > "$log"
+now() { perl -MTime::HiRes=time -e "printf q(%.3f), time"; }
+pause() { perl -e "select undef, undef, undef, \$ARGV[0]" "$1"; }
+within() {  # <start> <min> <max> <label>
+  local took
+  took=$(perl -e "printf q(%.3f), \$ARGV[1] - \$ARGV[0]" "$1" "$(now)")
+  perl -e "exit !(\$ARGV[0] >= \$ARGV[1] && \$ARGV[0] < \$ARGV[2])" "$took" "$2" "$3" \
+    || printf "bash %s: %s took %ss, outside [%s, %s)\n" "$BASH_VERSION" "$4" "$took" "$2" "$3"
+}
+sleeps() {  # <expected> <label>: compare and reset the sleep-start count
+  local n
+  n=$(grep -c . "$log" 2>/dev/null) || n=0
+  : > "$log"
+  [ "$n" -eq "$1" ] || printf "bash %s: %s started sleep %s times, not %s\n" "$BASH_VERSION" "$2" "$n" "$1"
+}
+modern=0
+[ "${BASH_VERSINFO[0]}" -lt 4 ] || modern=1
+'
+
+test_sleep_helper_waits_without_starting_sleep() {
+  local script="$TMP_ROOT/sleep.sh" shim="$TMP_ROOT/sleep-shim" log="$TMP_ROOT/sleep.log"
+  make_sleep_shim "$shim" "$log"
+  # shellcheck disable=SC2016 # Expanded by the child shell.
+  printf '%s\n' "$SLEEP_CASE_PREAMBLE" \
+    't=$(now); fm_sleep 1; within "$t" 1 2.5 "an unopened whole-second wait"' \
+    'sleeps 1 "an unopened whole-second wait"' \
+    'fm_sleep_open' \
+    't=$(now); fm_sleep 1; within "$t" 1 2.5 "a whole-second wait"' \
+    'sleeps 0 "a whole-second wait"' \
+    't=$(now); fm_sleep 0.3; within "$t" 0.3 1.5 "a fractional wait"' \
+    'sleeps $((1 - modern)) "a fractional wait"' \
+    't=$(now); fm_sleep 0; within "$t" 0 0.5 "a zero wait"' \
+    'sleeps 0 "a zero wait"' \
+    'exec 19<&-' \
+    't=$(now); fm_sleep 1; within "$t" 1 2.5 "a wait whose descriptor was closed"' \
+    'sleeps 1 "a wait whose descriptor was closed"' \
+    't=$(now); fm_sleep 1; within "$t" 1 2.5 "the wait after a closed descriptor"' \
+    'sleeps 1 "the wait after a closed descriptor"' > "$script"
+  run_everywhere "fm_sleep timing" "$script" "$shim" "$log"
+  pass "fm_sleep waits its full time inside bash, and falls back to sleep without a usable FIFO"
+}
+
+test_sleep_helper_returns_promptly_on_a_trapped_signal() {
+  local script="$TMP_ROOT/sleep-signal.sh" shim="$TMP_ROOT/sleep-signal-shim" log="$TMP_ROOT/sleep-signal.log"
+  make_sleep_shim "$shim" "$log"
+  # shellcheck disable=SC2016 # Expanded by the child shell.
+  printf '%s\n' "$SLEEP_CASE_PREAMBLE" \
+    'for signal in TERM HUP; do' \
+    '  t=$(now)' \
+    '  "$BASH" -c ". \"\$1/bin/fm-wake-lib.sh\"; trap \"exit 0\" $signal; fm_sleep_open; fm_sleep 10" _ "$1" &' \
+    '  child=$!' \
+    '  pause 0.3' \
+    '  kill "-$signal" "$child"' \
+    '  wait "$child"' \
+    '  within "$t" 0.3 5 "a ten-second wait stopped by a trapped $signal"' \
+    'done' \
+    'sleeps 0 "a wait stopped by a signal"' > "$script"
+  run_everywhere "fm_sleep signal" "$script" "$shim" "$log"
+  pass "fm_sleep runs a trapped TERM or HUP handler at once rather than after the wait"
+}
+
+test_identity_helpers_match_the_pipelines_they_replace() {
+  local script="$TMP_ROOT/identity.sh" pids='' pid
+  perl -e 'sleep 60' -- 'two  spaces' "$(printf 'tab\there')" 'trailing   ' >/dev/null 2>&1 &
+  pids="$pids $!"
+  perl -e 'sleep 60' -- "$(printf 'caf\303\251')" "$(printf 'bad\377byte')" >/dev/null 2>&1 &
+  pids="$pids $!"
+  sleep 60 &
+  pids="$pids $!"
+  cat > "$script" <<'SH'
+. "$1/bin/fm-wake-lib.sh"
+. "$1/bin/fm-supervision-engine-lib.sh"
+shift
+for pid in "$@"; do
+  got=$(FM_PROC_ROOT_OVERRIDE=/nonexistent fm_pid_identity "$pid")
+  want=$(COLUMNS=10000 LC_ALL=C ps -p "$pid" -o lstart= -o command= | sed 's/^[[:space:]]*//')
+  [ -n "$got" ] && [ "$got" = "$want" ] || printf 'fm_pid_identity %s: helper %q, pipeline %q\n' "$pid" "$got" "$want"
+  got=$(_fm_engine_identity "$pid")
+  want=$(printf '%s\n' "$(fm_pid_identity "$pid")" | tr '\t\n' '  ' | sed 's/ *$//')
+  [ -n "$got" ] && [ "$got" = "$want" ] || printf '_fm_engine_identity %s: helper %q, pipeline %q\n' "$pid" "$got" "$want"
+done
+SH
+  # shellcheck disable=SC2086 # One argument per recorded pid.
+  run_everywhere "identity helpers" "$script" $pids
+  for pid in $pids; do
+    kill "$pid" 2>/dev/null || true
+  done
+  pass "fm_pid_identity and _fm_engine_identity match the sed and tr pipelines they replace"
+}
+
+test_pr_file_helpers_read_the_kernel_name_once() {
+  local script="$TMP_ROOT/pr-uname.sh" shim="$TMP_ROOT/pr-uname-shim" log="$TMP_ROOT/pr-uname.log" file="$TMP_ROOT/pr-file"
+  mkdir -p "$shim"
+  cat > "$shim/uname" <<SH
+#!/bin/sh
+printf 'uname\n' >> "$log"
+exec $(command -v uname) "\$@"
+SH
+  chmod +x "$shim/uname"
+  : > "$file"
+  cat > "$script" <<'SH'
+PATH="$2:$PATH"
+: > "$3"
+. "$1/bin/fm-wake-lib.sh"
+. "$1/bin/fm-pr-lib.sh"
+for _ in 1 2 3; do
+  for read_one in fm_pr_file_mode fm_pr_file_device fm_pr_file_inode fm_pr_file_link_count; do
+    value=$("$read_one" "$4")
+    case "$value" in ''|*[!0-9]*) printf '%s %q\n' "$read_one" "$value" ;; esac
+  done
+done
+calls=$(grep -c . "$3" || true)
+[ "$calls" -eq 1 ] || printf 'uname ran %s times for 12 stat reads\n' "$calls"
+SH
+  run_everywhere "pr file helpers" "$script" "$shim" "$log" "$file"
+  pass "fm_pr_file helpers resolve the kernel name once per process beside the wake library"
+}
+
 if [ -n "${FM_TEST_ONLY:-}" ]; then
   "$FM_TEST_ONLY"
 else
@@ -234,4 +369,8 @@ else
   test_recovery_marker_read_accepts_exactly_one_newline
   test_window_to_task_matches_the_meta_pipeline
   test_classify_stat_helpers_read_the_kernel_name_once
+  test_sleep_helper_waits_without_starting_sleep
+  test_sleep_helper_returns_promptly_on_a_trapped_signal
+  test_identity_helpers_match_the_pipelines_they_replace
+  test_pr_file_helpers_read_the_kernel_name_once
 fi
